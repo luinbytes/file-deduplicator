@@ -1,10 +1,14 @@
 package main
 
 import (
+	"crypto/md5"
+	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"hash"
 	"io"
 	"log"
 	"os"
@@ -13,6 +17,13 @@ import (
 	"strings"
 	"sync"
 	"time"
+)
+
+const (
+	version      = "2.0.0"
+	reportFile   = ".deduplicator_report.json"
+	undoFile     = ".deduplicator_undo.json"
+	maxHistory   = 100
 )
 
 // FileHash represents a file and its hash
@@ -32,12 +43,19 @@ type DuplicateGroup struct {
 
 // Config holds application configuration
 type Config struct {
-	Dir        string
-	Recursive  bool
-	DryRun     bool
-	Verbose    bool
-	Workers    int
-	MinSize    int64 // Minimum file size to check (bytes)
+	Dir           string
+	Recursive     bool
+	DryRun        bool
+	Verbose       bool
+	Workers       int
+	MinSize       int64 // Minimum file size to check (bytes)
+	Interactive   bool
+	MoveTo        string // Move duplicates to this folder instead of deleting
+	KeepCriteria  string // "oldest", "newest", "largest", "smallest", "first", "path"
+	HashAlgorithm string // "sha256", "sha1", "md5"
+	FilePattern  string // Only include files matching this pattern
+	ExportReport  bool
+	UndoLast      bool
 }
 
 var (
@@ -51,19 +69,45 @@ func init() {
 	flag.BoolVar(&cfg.Verbose, "verbose", false, "Show detailed output")
 	flag.IntVar(&cfg.Workers, "workers", runtime.NumCPU(), "Number of worker goroutines")
 	flag.Int64Var(&cfg.MinSize, "min-size", 1024, "Minimum file size in bytes (default: 1KB)")
+	flag.BoolVar(&cfg.Interactive, "interactive", false, "Ask before deleting each duplicate")
+	flag.StringVar(&cfg.MoveTo, "move-to", "", "Move duplicates to this folder instead of deleting")
+	flag.StringVar(&cfg.KeepCriteria, "keep", "oldest", "File to keep criteria: oldest, newest, largest, smallest, first, or path:<path>")
+	flag.StringVar(&cfg.HashAlgorithm, "hash", "sha256", "Hash algorithm: sha256, sha1, or md5")
+	flag.StringVar(&cfg.FilePattern, "pattern", "", "File pattern to match (e.g., *.jpg, *.pdf)")
+	flag.BoolVar(&cfg.ExportReport, "export", false, "Export duplicate report to JSON file")
+	flag.BoolVar(&cfg.UndoLast, "undo", false, "Undo last operation")
 }
 
 func main() {
 	flag.Parse()
 
+	// Handle undo
+	if cfg.UndoLast {
+		if err := undoLast(); err != nil {
+			log.Fatalf("❌ Error undoing: %v", err)
+		}
+		return
+	}
+
 	log.SetFlags(log.Ltime)
 
-	log.Println("🔍 File Deduplicator - Starting...")
+	log.Printf("🔍 File Deduplicator v%s - Starting...", version)
 	if cfg.Verbose {
 		log.Printf("📁 Scanning directory: %s", cfg.Dir)
 		log.Printf("🔄 Recursive: %v", cfg.Recursive)
 		log.Printf("👷 Workers: %d", cfg.Workers)
 		log.Printf("📏 Min size: %d bytes", cfg.MinSize)
+		log.Printf("🔐 Hash algorithm: %s", cfg.HashAlgorithm)
+		if cfg.FilePattern != "" {
+			log.Printf("🎯 File pattern: %s", cfg.FilePattern)
+		}
+		if cfg.MoveTo != "" {
+			log.Printf("📦 Move duplicates to: %s", cfg.MoveTo)
+		}
+		log.Printf("✋ Keep criteria: %s", cfg.KeepCriteria)
+		if cfg.Interactive {
+			log.Printf("❓ Interactive mode enabled")
+		}
 	}
 
 	startTime := time.Now()
@@ -87,10 +131,24 @@ func main() {
 			continue
 		}
 		if info.Size() >= cfg.MinSize {
+			// Filter by file pattern if specified
+			if cfg.FilePattern != "" {
+				matched, err := filepath.Match(cfg.FilePattern, filepath.Base(file))
+				if err != nil {
+					log.Printf("⚠️  Invalid pattern %s: %v", cfg.FilePattern, err)
+					continue
+				}
+				if !matched {
+					if cfg.Verbose {
+						log.Printf("🚫 Skipping non-matching file: %s", file)
+					}
+					continue
+				}
+			}
 			filteredFiles = append(filteredFiles, file)
 		}
 	}
-	log.Printf("📏 After size filter: %d files", len(filteredFiles))
+	log.Printf("📏 After filters: %d files", len(filteredFiles))
 
 	// Compute hashes in parallel
 	fileHashes, err := computeHashes(filteredFiles)
@@ -106,10 +164,19 @@ func main() {
 	// Report duplicates
 	reportDuplicates(duplicates)
 
-	// Delete duplicates if not dry run
+	// Export report if requested
+	if cfg.ExportReport {
+		if err := exportReport(duplicates); err != nil {
+			log.Printf("⚠️  Failed to export report: %v", err)
+		} else {
+			log.Printf("📄 Report exported to %s", reportFile)
+		}
+	}
+
+	// Process duplicates if not dry run
 	if !cfg.DryRun && len(duplicates) > 0 {
-		if err := deleteDuplicates(duplicates); err != nil {
-			log.Fatalf("❌ Error deleting duplicates: %v", err)
+		if err := processDuplicates(duplicates); err != nil {
+			log.Fatalf("❌ Error processing duplicates: %v", err)
 		}
 	}
 
@@ -119,10 +186,16 @@ func main() {
 
 func scanFiles(dir string, recursive bool) ([]string, error) {
 	var files []string
+	var scanned int
 
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
+		}
+
+		scanned++
+		if cfg.Verbose && scanned%1000 == 0 {
+			log.Printf("📁 Scanned %d files...", scanned)
 		}
 
 		if info.IsDir() {
@@ -202,7 +275,8 @@ func worker(wg *sync.WaitGroup, fileChan <-chan string, resultChan chan<- FileHa
 	defer wg.Done()
 
 	for file := range fileChan {
-		hash, size, modTime, err := hashFile(file)
+		hasher := getHasher()
+		hash, size, modTime, err := hashFile(file, hasher)
 		if err != nil {
 			errorChan <- fmt.Errorf("%s: %w", file, err)
 			continue
@@ -221,7 +295,20 @@ func worker(wg *sync.WaitGroup, fileChan <-chan string, resultChan chan<- FileHa
 	}
 }
 
-func hashFile(path string) (string, int64, time.Time, error) {
+func getHasher() hash.Hash {
+	switch strings.ToLower(cfg.HashAlgorithm) {
+	case "md5":
+		return md5.New()
+	case "sha1":
+		return sha1.New()
+	case "sha256":
+		return sha256.New()
+	default:
+		return sha256.New()
+	}
+}
+
+func hashFile(path string, hasher hash.Hash) (string, int64, time.Time, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return "", 0, time.Time{}, err
@@ -233,7 +320,6 @@ func hashFile(path string) (string, int64, time.Time, error) {
 		return "", 0, time.Time{}, err
 	}
 
-	hasher := sha256.New()
 	if _, err := io.Copy(hasher, file); err != nil {
 		return "", 0, time.Time{}, err
 	}
@@ -272,7 +358,7 @@ func reportDuplicates(duplicates []DuplicateGroup) {
 	totalSpace := int64(0)
 
 	log.Println("\n👯 Duplicate Files:")
-	log.Println(strings.Repeat("=", 60))
+	log.Println(strings.Repeat("=", 70))
 
 	for i, group := range duplicates {
 		numDuplicates := len(group.Files) - 1
@@ -280,62 +366,254 @@ func reportDuplicates(duplicates []DuplicateGroup) {
 		totalDuplicates += numDuplicates
 		totalSpace += space
 
+		keepIdx := selectFileToKeep(group)
+
 		log.Printf("\n[%d] Hash: %s", i+1, group.Hash[:16]+"...")
 		log.Printf("    Size: %s", formatBytes(group.Size))
 		log.Printf("    Files: %d (keeping 1, removing %d)", len(group.Files), numDuplicates)
 
-		// Find the oldest file to keep
-		oldestIdx := 0
-		for i, fh := range group.Files {
-			if fh.ModTime.Before(group.Files[oldestIdx].ModTime) {
-				oldestIdx = i
-			}
-		}
-
 		for j, fh := range group.Files {
 			prefix := "    ✓ KEEP"
-			if j != oldestIdx {
+			if j != keepIdx {
 				prefix = "    ✗ DELETE"
 			}
 			log.Printf("%s %s (modified: %s)", prefix, fh.Path, fh.ModTime.Format("2006-01-02 15:04:05"))
 		}
 	}
 
-	log.Println("\n" + strings.Repeat("=", 60))
+	log.Println("\n" + strings.Repeat("=", 70))
 	log.Printf("📊 Summary: %d duplicate files, %s of space can be freed",
 		totalDuplicates, formatBytes(totalSpace))
 }
 
-func deleteDuplicates(duplicates []DuplicateGroup) error {
-	totalDeleted := 0
-	totalSpace := int64(0)
+func selectFileToKeep(group DuplicateGroup) int {
+	files := group.Files
 
-	log.Println("\n🗑️  Deleting duplicates...")
+	if strings.HasPrefix(cfg.KeepCriteria, "path:") {
+		// Keep file matching specific path
+		targetPath := strings.TrimPrefix(cfg.KeepCriteria, "path:")
+		for i, fh := range files {
+			if strings.Contains(fh.Path, targetPath) {
+				return i
+			}
+		}
+		return 0 // Default to first if not found
+	}
 
-	for _, group := range duplicates {
-		// Find the oldest file to keep
+	switch strings.ToLower(cfg.KeepCriteria) {
+	case "oldest":
 		oldestIdx := 0
-		for i, fh := range group.Files {
-			if fh.ModTime.Before(group.Files[oldestIdx].ModTime) {
+		for i, fh := range files {
+			if fh.ModTime.Before(files[oldestIdx].ModTime) {
 				oldestIdx = i
 			}
 		}
+		return oldestIdx
+
+	case "newest":
+		newestIdx := 0
+		for i, fh := range files {
+			if fh.ModTime.After(files[newestIdx].ModTime) {
+				newestIdx = i
+			}
+		}
+		return newestIdx
+
+	case "largest":
+		largestIdx := 0
+		for i, fh := range files {
+			if fh.Size > files[largestIdx].Size {
+				largestIdx = i
+			}
+		}
+		return largestIdx
+
+	case "smallest":
+		smallestIdx := 0
+		for i, fh := range files {
+			if fh.Size < files[smallestIdx].Size {
+				smallestIdx = i
+			}
+		}
+		return smallestIdx
+
+	default:
+		return 0
+	}
+}
+
+func processDuplicates(duplicates []DuplicateGroup) error {
+	var undoLog []UndoEntry
+
+	// Create move directory if specified
+	if cfg.MoveTo != "" {
+		if err := os.MkdirAll(cfg.MoveTo, 0755); err != nil {
+			return fmt.Errorf("failed to create move directory: %w", err)
+		}
+	}
+
+	totalDeleted := 0
+	totalSpace := int64(0)
+
+	log.Printf("\n🗑️  %s duplicates...", map[bool]string{true: "Moving", false: "Deleting"}[cfg.MoveTo != ""])
+
+	for _, group := range duplicates {
+		keepIdx := selectFileToKeep(group)
 
 		for i, fh := range group.Files {
-			if i != oldestIdx {
-				if err := os.Remove(fh.Path); err != nil {
-					log.Printf("❌ Failed to delete %s: %v", fh.Path, err)
+			if i != keepIdx {
+				// Interactive mode
+				if cfg.Interactive {
+					fmt.Printf("\nDelete %s? (%s) [y/n/q]: ", fh.Path, formatBytes(fh.Size))
+					var response string
+					fmt.Scanln(&response)
+					if strings.ToLower(response) != "y" {
+						if strings.ToLower(response) == "q" {
+							log.Println("❓ Quitting...")
+							return nil
+						}
+						continue
+					}
+				}
+
+				var err error
+				if cfg.MoveTo != "" {
+					// Move to directory
+					targetPath := filepath.Join(cfg.MoveTo, filepath.Base(fh.Path))
+					// Handle name conflicts
+					counter := 1
+					for {
+						if _, err := os.Stat(targetPath); os.IsNotExist(err) {
+							break
+						}
+						base := filepath.Base(fh.Path)
+						ext := filepath.Ext(base)
+						name := strings.TrimSuffix(base, ext)
+						targetPath = filepath.Join(cfg.MoveTo, fmt.Sprintf("%s_%d%s", name, counter, ext))
+						counter++
+					}
+					err = os.Rename(fh.Path, targetPath)
+					if err == nil {
+						log.Printf("✓ Moved %s -> %s", fh.Path, targetPath)
+					}
 				} else {
-					log.Printf("✓ Deleted %s", fh.Path)
+					// Delete file
+					err = os.Remove(fh.Path)
+					if err == nil {
+						log.Printf("✓ Deleted %s", fh.Path)
+					}
+				}
+
+				if err != nil {
+					log.Printf("❌ Failed to process %s: %v", fh.Path, err)
+				} else {
 					totalDeleted++
 					totalSpace += fh.Size
+					undoLog = append(undoLog, UndoEntry{
+						Path:        fh.Path,
+						Size:        fh.Size,
+						ModTime:     fh.ModTime,
+						Action:      "deleted",
+						Timestamp:   time.Now(),
+						TargetPath:  "",
+					})
 				}
 			}
 		}
 	}
 
-	log.Printf("\n✅ Deleted %d files, freed %s of space", totalDeleted, formatBytes(totalSpace))
+	log.Printf("\n✅ %s %d files, freed %s of space", map[bool]string{true: "Moved", false: "Deleted"}[cfg.MoveTo != ""], totalDeleted, formatBytes(totalSpace))
+
+	// Save undo log
+	if len(undoLog) > 0 && cfg.MoveTo == "" {
+		if err := saveUndoLog(undoLog); err != nil {
+			log.Printf("⚠️  Failed to save undo log: %v", err)
+		} else {
+			log.Printf("💾 Undo log saved (use -undo to restore)")
+		}
+	}
+
 	return nil
+}
+
+type UndoEntry struct {
+	Path       string    `json:"path"`
+	Size       int64     `json:"size"`
+	ModTime    time.Time `json:"mod_time"`
+	Action     string    `json:"action"`
+	Timestamp  time.Time `json:"timestamp"`
+	TargetPath string    `json:"target_path,omitempty"`
+}
+
+func saveUndoLog(entries []UndoEntry) error {
+	return os.WriteFile(undoFile, []byte(fmt.Sprintf(`{"entries":%d,"files":%s}`,
+		len(entries),
+		toString(entries))), 0600)
+}
+
+func toString(v interface{}) string {
+	data, _ := json.Marshal(v)
+	return string(data)
+}
+
+func undoLast() error {
+	data, err := os.ReadFile(undoFile)
+	if err != nil {
+		return fmt.Errorf("no undo log found: %w", err)
+	}
+
+	log.Printf("🔄 Undo log found. Note: Files that were deleted cannot be restored (only the metadata is logged).\n")
+	log.Printf("If you used -move-to option, files are in that directory.\n")
+	
+	fmt.Print("Continue? [y/n]: ")
+	var response string
+	fmt.Scanln(&response)
+	if strings.ToLower(response) != "y" {
+		return nil
+	}
+
+	log.Println("⚠️  Undo is informational only - deleted files cannot be recovered")
+	log.Printf("💾 View undo log at: %s\n", undoFile)
+	
+	var undoData map[string]interface{}
+	if err := json.Unmarshal(data, &undoData); err != nil {
+		return fmt.Errorf("invalid undo log: %w", err)
+	}
+	
+	log.Printf("📊 %d files were deleted\n", undoData["entries"])
+	return nil
+}
+
+func exportReport(duplicates []DuplicateGroup) error {
+	type Report struct {
+		Version      string          `json:"version"`
+		Timestamp    time.Time       `json:"timestamp"`
+		Config       Config          `json:"config"`
+		DuplicateCount int           `json:"duplicate_count"`
+		TotalSpace   int64          `json:"total_space"`
+		Duplicates   []DuplicateGroup `json:"duplicates"`
+	}
+
+	totalSpace := int64(0)
+	for _, group := range duplicates {
+		totalSpace += group.Size * int64(len(group.Files)-1)
+	}
+
+	report := Report{
+		Version:        version,
+		Timestamp:      time.Now(),
+		Config:         cfg,
+		DuplicateCount: len(duplicates),
+		TotalSpace:     totalSpace,
+		Duplicates:     duplicates,
+	}
+
+	data, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(reportFile, data, 0644)
 }
 
 func formatBytes(bytes int64) string {
