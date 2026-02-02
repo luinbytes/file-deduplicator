@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,7 +18,8 @@ func TestHashFile(t *testing.T) {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
 
-	hash, size, modTime, err := hashFile(testFile)
+	hasher := sha256.New()
+	hash, size, modTime, err := hashFile(testFile, hasher)
 	if err != nil {
 		t.Fatalf("hashFile() error = %v", err)
 	}
@@ -38,7 +40,8 @@ func TestHashFile(t *testing.T) {
 	}
 
 	// Verify hash is deterministic
-	hash2, _, _, err := hashFile(testFile)
+	hasher2 := sha256.New()
+	hash2, _, _, err := hashFile(testFile, hasher2)
 	if err != nil {
 		t.Fatalf("hashFile() error = %v", err)
 	}
@@ -212,7 +215,8 @@ func BenchmarkHashFile(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _, _, _ = hashFile(testFile)
+		hasher := sha256.New()
+		_, _, _, _ = hashFile(testFile, hasher)
 	}
 }
 
