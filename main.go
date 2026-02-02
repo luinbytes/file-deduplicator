@@ -20,10 +20,11 @@ import (
 )
 
 const (
-	version      = "2.0.0"
-	reportFile   = ".deduplicator_report.json"
-	undoFile     = ".deduplicator_undo.json"
-	maxHistory   = 100
+	version                = "2.0.0"
+	reportFile             = ".deduplicator_report.json"
+	undoFile               = ".deduplicator_undo.json"
+	maxHistory             = 100
+	progressUpdateInterval  = 2 * time.Second
 )
 
 // FileHash represents a file and its hash
@@ -155,6 +156,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("❌ Error computing hashes: %v", err)
 	}
+	if !cfg.Verbose {
+		fmt.Fprintln(os.Stderr) // Newline after progress bar
+	}
 	log.Printf("🔐 Computed %d hashes", len(fileHashes))
 
 	// Find duplicates
@@ -187,15 +191,29 @@ func main() {
 func scanFiles(dir string, recursive bool) ([]string, error) {
 	var files []string
 	var scanned int
+	var scannedMutex sync.Mutex
+
+	// Simple progress tracker
+	lastProgressUpdate := time.Now()
 
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 
+		scannedMutex.Lock()
 		scanned++
-		if cfg.Verbose && scanned%1000 == 0 {
-			log.Printf("📁 Scanned %d files...", scanned)
+		currentScanned := scanned
+		scannedMutex.Unlock()
+
+		// Update progress periodically
+		if time.Since(lastProgressUpdate) > progressUpdateInterval {
+			lastProgressUpdate = time.Now()
+			if cfg.Verbose {
+				log.Printf("📁 Scanned %d files...", currentScanned)
+			} else {
+				fmt.Fprintf(os.Stderr, "\r📁 Scanning: %d files", currentScanned)
+			}
 		}
 
 		if info.IsDir() {
@@ -225,6 +243,11 @@ func scanFiles(dir string, recursive bool) ([]string, error) {
 		return nil
 	})
 
+	// Final progress update
+	if !cfg.Verbose {
+		fmt.Fprintf(os.Stderr, "\r📁 Scanning: %d files\n", len(files))
+	}
+
 	return files, err
 }
 
@@ -234,10 +257,17 @@ func computeHashes(files []string) ([]FileHash, error) {
 	resultChan := make(chan FileHash, len(files))
 	errorChan := make(chan error, len(files))
 
+	// Progress tracking
+	var hashedCount int
+	var hashedMutex sync.Mutex
+	totalFiles := len(files)
+	lastProgressUpdate := time.Now()
+	const progressUpdateInterval = 2 * time.Second
+
 	// Start worker goroutines
 	for i := 0; i < cfg.Workers; i++ {
 		wg.Add(1)
-		go worker(&wg, fileChan, resultChan, errorChan)
+		go worker(&wg, fileChan, resultChan, errorChan, &hashedCount, &hashedMutex, &lastProgressUpdate, totalFiles)
 	}
 
 	// Send files to workers
@@ -271,7 +301,7 @@ func computeHashes(files []string) ([]FileHash, error) {
 	return fileHashes, nil
 }
 
-func worker(wg *sync.WaitGroup, fileChan <-chan string, resultChan chan<- FileHash, errorChan chan<- error) {
+func worker(wg *sync.WaitGroup, fileChan <-chan string, resultChan chan<- FileHash, errorChan chan<- error, hashedCount *int, hashedMutex *sync.Mutex, lastProgressUpdate *time.Time, totalFiles int) {
 	defer wg.Done()
 
 	for file := range fileChan {
@@ -291,6 +321,23 @@ func worker(wg *sync.WaitGroup, fileChan <-chan string, resultChan chan<- FileHa
 			Size:    size,
 			Hash:    hash,
 			ModTime: modTime,
+		}
+
+		// Update progress
+		hashedMutex.Lock()
+		*hashedCount++
+		currentHashed := *hashedCount
+		hashedMutex.Unlock()
+
+		// Update progress periodically
+		if time.Since(*lastProgressUpdate) > progressUpdateInterval {
+			*lastProgressUpdate = time.Now()
+			if cfg.Verbose {
+				log.Printf("🔐 Hashed %d/%d files (%.1f%%)", currentHashed, totalFiles, float64(currentHashed)*100/float64(totalFiles))
+			} else {
+				percentage := float64(currentHashed) * 100 / float64(totalFiles)
+				fmt.Fprintf(os.Stderr, "\r🔐 Hashing: %d/%d files (%.1f%%)", currentHashed, totalFiles, percentage)
+			}
 		}
 	}
 }
