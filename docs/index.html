@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>file-deduplicator — CLI duplicate finder with perceptual image detection</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            background: #0a0a0f;
+            min-height: 100vh;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+        
+        /* Hero */
+        .hero {
+            padding: 100px 0 60px;
+            text-align: center;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            border-bottom: 1px solid #2a2a3e;
+        }
+        
+        .hero h1 {
+            font-size: 3.5rem;
+            font-weight: 800;
+            color: #fff;
+            margin-bottom: 20px;
+            letter-spacing: -0.02em;
+        }
+        
+        .hero h1 span {
+            color: #00d4aa;
+        }
+        
+        .hero .tagline {
+            font-size: 1.5rem;
+            color: #a0a0b0;
+            margin-bottom: 40px;
+            max-width: 700px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        
+        .hero .cta {
+            display: flex;
+            gap: 20px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        
+        .btn {
+            padding: 16px 32px;
+            border-radius: 8px;
+            font-size: 1.1rem;
+            font-weight: 600;
+            text-decoration: none;
+            transition: all 0.2s;
+            display: inline-block;
+        }
+        
+        .btn-primary {
+            background: #00d4aa;
+            color: #0a0a0f;
+        }
+        
+        .btn-primary:hover {
+            background: #00ffc8;
+            transform: translateY(-2px);
+        }
+        
+        .btn-secondary {
+            background: transparent;
+            color: #fff;
+            border: 2px solid #3a3a4e;
+        }
+        
+        .btn-secondary:hover {
+            border-color: #00d4aa;
+            color: #00d4aa;
+        }
+        
+        /* Terminal Demo */
+        .demo {
+            padding: 60px 0;
+            background: #0a0a0f;
+        }
+        
+        .terminal {
+            max-width: 900px;
+            margin: 0 auto;
+            background: #1a1a24;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+            border: 1px solid #2a2a3e;
+        }
+        
+        .terminal-header {
+            background: #252530;
+            padding: 12px 16px;
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        
+        .terminal-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+        
+        .terminal-dot.red { background: #ff5f56; }
+        .terminal-dot.yellow { background: #ffbd2e; }
+        .terminal-dot.green { background: #27c93f; }
+        
+        .terminal-body {
+            padding: 24px;
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+            font-size: 14px;
+            line-height: 1.8;
+        }
+        
+        .terminal-line {
+            margin-bottom: 4px;
+        }
+        
+        .terminal-prompt {
+            color: #00d4aa;
+        }
+        
+        .terminal-command {
+            color: #fff;
+        }
+        
+        .terminal-output {
+            color: #a0a0b0;
+        }
+        
+        .terminal-highlight {
+            color: #ffbd2e;
+        }
+        
+        .terminal-success {
+            color: #27c93f;
+        }
+        
+        /* Features */
+        .features {
+            padding: 80px 0;
+            background: #111118;
+        }
+        
+        .features h2 {
+            text-align: center;
+            font-size: 2.5rem;
+            color: #fff;
+            margin-bottom: 60px;
+        }
+        
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 30px;
+        }
+        
+        .feature-card {
+            background: #1a1a24;
+            padding: 30px;
+            border-radius: 12px;
+            border: 1px solid #2a2a3e;
+            transition: all 0.2s;
+        }
+        
+        .feature-card:hover {
+            border-color: #00d4aa;
+            transform: translateY(-4px);
+        }
+        
+        .feature-icon {
+            font-size: 2.5rem;
+            margin-bottom: 20px;
+        }
+        
+        .feature-card h3 {
+            color: #fff;
+            font-size: 1.3rem;
+            margin-bottom: 12px;
+        }
+        
+        .feature-card p {
+            color: #a0a0b0;
+            line-height: 1.7;
+        }
+        
+        /* Comparison */
+        .comparison {
+            padding: 80px 0;
+            background: #0a0a0f;
+        }
+        
+        .comparison h2 {
+            text-align: center;
+            font-size: 2.5rem;
+            color: #fff;
+            margin-bottom: 40px;
+        }
+        
+        table {
+            width: 100%;
+            max-width: 800px;
+            margin: 0 auto;
+            border-collapse: collapse;
+            background: #1a1a24;
+            border-radius: 12px;
+            overflow: hidden;
+            border: 1px solid #2a2a3e;
+        }
+        
+        th, td {
+            padding: 16px 24px;
+            text-align: left;
+            border-bottom: 1px solid #2a2a3e;
+        }
+        
+        th {
+            background: #252530;
+            color: #fff;
+            font-weight: 600;
+        }
+        
+        td {
+            color: #a0a0b0;
+        }
+        
+        tr:last-child td {
+            border-bottom: none;
+        }
+        
+        .check { color: #27c93f; }
+        .cross { color: #ff5f56; }
+        
+        tr.highlight {
+            background: rgba(0, 212, 170, 0.1);
+        }
+        
+        tr.highlight td {
+            color: #fff;
+        }
+        
+        /* Pricing */
+        .pricing {
+            padding: 80px 0;
+            background: #111118;
+        }
+        
+        .pricing h2 {
+            text-align: center;
+            font-size: 2.5rem;
+            color: #fff;
+            margin-bottom: 60px;
+        }
+        
+        .pricing-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 30px;
+            max-width: 900px;
+            margin: 0 auto;
+        }
+        
+        .pricing-card {
+            background: #1a1a24;
+            padding: 40px 30px;
+            border-radius: 12px;
+            border: 1px solid #2a2a3e;
+            text-align: center;
+            transition: all 0.2s;
+        }
+        
+        .pricing-card.featured {
+            border-color: #00d4aa;
+            transform: scale(1.05);
+        }
+        
+        .pricing-card h3 {
+            color: #fff;
+            font-size: 1.5rem;
+            margin-bottom: 10px;
+        }
+        
+        .pricing-card .price {
+            font-size: 3rem;
+            font-weight: 800;
+            color: #00d4aa;
+            margin-bottom: 20px;
+        }
+        
+        .pricing-card ul {
+            list-style: none;
+            text-align: left;
+            margin-bottom: 30px;
+        }
+        
+        .pricing-card li {
+            color: #a0a0b0;
+            padding: 8px 0;
+            padding-left: 24px;
+            position: relative;
+        }
+        
+        .pricing-card li::before {
+            content: "✓";
+            position: absolute;
+            left: 0;
+            color: #00d4aa;
+        }
+        
+        /* Footer */
+        footer {
+            padding: 40px 0;
+            background: #0a0a0f;
+            border-top: 1px solid #2a2a3e;
+            text-align: center;
+        }
+        
+        footer p {
+            color: #606070;
+        }
+        
+        footer a {
+            color: #00d4aa;
+            text-decoration: none;
+        }
+        
+        /* Responsive */
+        @media (max-width: 768px) {
+            .hero h1 {
+                font-size: 2.5rem;
+            }
+            
+            .hero .tagline {
+                font-size: 1.2rem;
+            }
+            
+            .pricing-card.featured {
+                transform: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <section class="hero">
+        <div class="container">
+            <h1>file-<span>deduplicator</span></h1>
+            <p class="tagline">The only CLI tool that finds <strong>similar images</strong>, not just exact duplicates. Clean up your photo library with one command.</p>
+            <div class="cta">
+                <a href="https://gumroad.com/l/file-deduplicator" class="btn btn-primary">Buy Now — $15</a>
+                <a href="https://github.com/luinbytes/file-deduplicator" class="btn btn-secondary">View on GitHub</a>
+            </div>
+        </div>
+    </section>
+
+    <section class="demo">
+        <div class="container">
+            <div class="terminal">
+                <div class="terminal-header">
+                    <div class="terminal-dot red"></div>
+                    <div class="terminal-dot yellow"></div>
+                    <div class="terminal-dot green"></div>
+                </div>
+                <div class="terminal-body">
+                    <div class="terminal-line">
+                        <span class="terminal-prompt">$</span>
+                        <span class="terminal-command"> file-deduplicator -dir ~/Pictures -perceptual -dry-run</span>
+                    </div>
+                    <div class="terminal-line terminal-output">🔍 File Deduplicator v3.0.0 - Starting...</div>
+                    <div class="terminal-line terminal-output">🖼️  Perceptual mode enabled (dhash, threshold: 10)</div>
+                    <div class="terminal-line terminal-output">📊 Found 1,247 files</div>
+                    <div class="terminal-line terminal-output">👯 Found 12 duplicate/similar groups</div>
+                    <div class="terminal-line terminal-output"></div>
+                    <div class="terminal-line terminal-highlight">🖼️  Similar Images Found:</div>
+                    <div class="terminal-line terminal-output">======================================================================</div>
+                    <div class="terminal-line terminal-output">[1] Size: 2.4 MB | Files: 3 | Similarity: 85%</div>
+                    <div class="terminal-line terminal-output">    ✓ KEEP ~/Photos/vacation/sunset.jpg</div>
+                    <div class="terminal-line terminal-output">    ✗ DELETE ~/Photos/vacation/sunset_edit.jpg</div>
+                    <div class="terminal-line terminal-output">    ✗ DELETE ~/Downloads/sunset_final.png</div>
+                    <div class="terminal-line terminal-output"></div>
+                    <div class="terminal-line terminal-output">[2] Size: 1.8 MB | Files: 2 | Similarity: 92%</div>
+                    <div class="terminal-line terminal-output">    ✓ KEEP ~/Photos/Cats/fluffy_original.jpg</div>
+                    <div class="terminal-line terminal-output">    ✗ DELETE ~/Photos/Cats/fluffy_copy(1).jpg</div>
+                    <div class="terminal-line terminal-output">======================================================================</div>
+                    <div class="terminal-line terminal-success">📊 Summary: 14 duplicates/similar files, 28.6 MB can be freed</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="features">
+        <div class="container">
+            <h2>Features</h2>
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <div class="feature-icon">🖼️</div>
+                    <h3>Perceptual Image Detection</h3>
+                    <p>Find similar images even when they've been resized, compressed, or lightly edited. Uses the same technology as Google Images and TinEye.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">⚡</div>
+                    <h3>Fast Parallel Processing</h3>
+                    <p>SHA256 hashing across all CPU cores. Processes thousands of files per second. Written in Go for maximum performance.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🔒</div>
+                    <h3>Safe by Default</h3>
+                    <p>Dry-run mode to preview changes. Move instead of delete. Interactive confirmation. Never lose data accidentally.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🎯</div>
+                    <h3>Smart Selection</h3>
+                    <p>Automatically keep the oldest, newest, largest, or smallest file. Or specify a "sacred" directory to prioritize.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">💻</div>
+                    <h3>Cross-Platform CLI</h3>
+                    <p>Works on macOS, Windows, and Linux. Scriptable and automatable. Integrate into your workflow or cron jobs.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">📊</div>
+                    <h3>Detailed Reports</h3>
+                    <p>Export JSON reports of all duplicates found. Review before deleting. Track what was removed.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="comparison">
+        <div class="container">
+            <h2>Why file-deduplicator?</h2>
+            <table>
+                <tr>
+                    <th>Tool</th>
+                    <th>CLI</th>
+                    <th>Cross-Platform</th>
+                    <th>Perceptual</th>
+                    <th>Price</th>
+                </tr>
+                <tr class="highlight">
+                    <td><strong>file-deduplicator</strong></td>
+                    <td class="check">✓</td>
+                    <td class="check">✓</td>
+                    <td class="check">✓</td>
+                    <td>$15</td>
+                </tr>
+                <tr>
+                    <td>dupeGuru</td>
+                    <td class="cross">✗</td>
+                    <td class="check">✓</td>
+                    <td class="cross">✗</td>
+                    <td>Free</td>
+                </tr>
+                <tr>
+                    <td>Gemini 2</td>
+                    <td class="cross">✗</td>
+                    <td class="cross">✗</td>
+                    <td class="check">~</td>
+                    <td>$20</td>
+                </tr>
+                <tr>
+                    <td>fdupes</td>
+                    <td class="check">✓</td>
+                    <td class="check">✓</td>
+                    <td class="cross">✗</td>
+                    <td>Free</td>
+                </tr>
+            </table>
+            <p style="text-align: center; margin-top: 30px; color: #a0a0b0;">No other CLI tool offers perceptual image deduplication.</p>
+        </div>
+    </section>
+
+    <section class="pricing">
+        <div class="container">
+            <h2>Simple Pricing</h2>
+            <div class="pricing-grid">
+                <div class="pricing-card">
+                    <h3>Personal</h3>
+                    <div class="price">$15</div>
+                    <ul>
+                        <li>Single user, unlimited machines</li>
+                        <li>All v3.x updates</li>
+                        <li>Email support</li>
+                        <li>Open source (MIT)</li>
+                    </ul>
+                    <a href="https://gumroad.com/l/file-deduplicator" class="btn btn-primary">Buy Now</a>
+                </div>
+                <div class="pricing-card featured">
+                    <h3>Team</h3>
+                    <div class="price">$39</div>
+                    <ul>
+                        <li>Up to 5 users</li>
+                        <li>Priority support</li>
+                        <li>Early access to features</li>
+                        <li>Best value</li>
+                    </ul>
+                    <a href="https://gumroad.com/l/file-deduplicator" class="btn btn-primary">Buy Team</a>
+                </div>
+                <div class="pricing-card">
+                    <h3>Lifetime</h3>
+                    <div class="price">$49</div>
+                    <ul>
+                        <li>All future versions</li>
+                        <li>Priority support forever</li>
+                        <li>Input on roadmap</li>
+                        <li>Pay once, use forever</li>
+                    </ul>
+                    <a href="https://gumroad.com/l/file-deduplicator" class="btn btn-secondary">Buy Lifetime</a>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <footer>
+        <div class="container">
+            <p>Made by <a href="https://github.com/luinbytes">@luinbytes</a> • <a href="https://github.com/luinbytes/file-deduplicator">GitHub</a> • <a href="https://gumroad.com/l/file-deduplicator">Gumroad</a></p>
+        </div>
+    </footer>
+</body>
+</html>
