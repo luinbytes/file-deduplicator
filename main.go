@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	version                = "2.0.0"
+	version                = "3.0.0"
 	reportFile             = ".deduplicator_report.json"
 	undoFile               = ".deduplicator_undo.json"
 	maxHistory             = 100
@@ -33,6 +33,7 @@ type FileHash struct {
 	Size     int64
 	Hash     string
 	ModTime  time.Time
+	PHash    string  // Perceptual hash for images
 }
 
 // DuplicateGroup represents a group of duplicate files
@@ -40,23 +41,28 @@ type DuplicateGroup struct {
 	Hash  string
 	Size  int64
 	Files []FileHash
+	Similarity float64 // For perceptual matches
 }
 
 // Config holds application configuration
 type Config struct {
-	Dir           string
-	Recursive     bool
-	DryRun        bool
-	Verbose       bool
-	Workers       int
-	MinSize       int64 // Minimum file size to check (bytes)
-	Interactive   bool
-	MoveTo        string // Move duplicates to this folder instead of deleting
-	KeepCriteria  string // "oldest", "newest", "largest", "smallest", "first", "path"
-	HashAlgorithm string // "sha256", "sha1", "md5"
-	FilePattern  string // Only include files matching this pattern
-	ExportReport  bool
-	UndoLast      bool
+	Dir            string
+	Recursive      bool
+	DryRun         bool
+	Verbose        bool
+	Workers        int
+	MinSize        int64  // Minimum file size to check (bytes)
+	Interactive    bool
+	MoveTo         string // Move duplicates to this folder instead of deleting
+	KeepCriteria   string // "oldest", "newest", "largest", "smallest", "first", "path"
+	HashAlgorithm  string // "sha256", "sha1", "md5"
+	FilePattern    string // Only include files matching this pattern
+	ExportReport   bool
+	UndoLast       bool
+	// Perceptual hashing options
+	PerceptualMode bool   // Enable perceptual hashing for images
+	PHashAlgorithm string // "dhash", "ahash", "phash"
+	SimilarityThreshold int // Hamming distance threshold (0-64, default 10)
 }
 
 var (
@@ -77,6 +83,11 @@ func init() {
 	flag.StringVar(&cfg.FilePattern, "pattern", "", "File pattern to match (e.g., *.jpg, *.pdf)")
 	flag.BoolVar(&cfg.ExportReport, "export", false, "Export duplicate report to JSON file")
 	flag.BoolVar(&cfg.UndoLast, "undo", false, "Undo last operation")
+	
+	// Perceptual hashing flags
+	flag.BoolVar(&cfg.PerceptualMode, "perceptual", false, "Enable perceptual hashing for images (finds similar images, not just exact duplicates)")
+	flag.StringVar(&cfg.PHashAlgorithm, "phash-algo", "dhash", "Perceptual hash algorithm: dhash (fast), ahash, phash (robust)")
+	flag.IntVar(&cfg.SimilarityThreshold, "similarity", 10, "Similarity threshold (0-64). Lower = stricter. Default 10.")
 }
 
 func main() {
@@ -108,6 +119,9 @@ func main() {
 		log.Printf("✋ Keep criteria: %s", cfg.KeepCriteria)
 		if cfg.Interactive {
 			log.Printf("❓ Interactive mode enabled")
+		}
+		if cfg.PerceptualMode {
+			log.Printf("🖼️  Perceptual mode enabled (%s, threshold: %d)", cfg.PHashAlgorithm, cfg.SimilarityThreshold)
 		}
 	}
 
@@ -312,8 +326,24 @@ func worker(wg *sync.WaitGroup, fileChan <-chan string, resultChan chan<- FileHa
 			continue
 		}
 
+		// Compute perceptual hash for images if enabled
+		var pHash string
+		if cfg.PerceptualMode && isImageFile(file) {
+			pHash, err = computePerceptualHash(file, cfg.PHashAlgorithm)
+			if err != nil {
+				// Log error but continue with regular hash
+				if cfg.Verbose {
+					log.Printf("⚠️  Could not compute perceptual hash for %s: %v", file, err)
+				}
+			}
+		}
+
 		if cfg.Verbose {
-			log.Printf("📄 %s: %s (%d bytes)", file, hash[:8]+"...", size)
+			if pHash != "" {
+				log.Printf("📄 %s: %s [phash: %s...] (%d bytes)", file, hash[:8]+"...", pHash[:8], size)
+			} else {
+				log.Printf("📄 %s: %s (%d bytes)", file, hash[:8]+"...", size)
+			}
 		}
 
 		resultChan <- FileHash{
@@ -321,6 +351,7 @@ func worker(wg *sync.WaitGroup, fileChan <-chan string, resultChan chan<- FileHa
 			Size:    size,
 			Hash:    hash,
 			ModTime: modTime,
+			PHash:   pHash,
 		}
 
 		// Update progress
@@ -375,6 +406,12 @@ func hashFile(path string, hasher hash.Hash) (string, int64, time.Time, error) {
 }
 
 func findDuplicates(fileHashes []FileHash) []DuplicateGroup {
+	// If perceptual mode is enabled, handle images differently
+	if cfg.PerceptualMode {
+		return findPerceptualDuplicates(fileHashes)
+	}
+	
+	// Standard exact-match deduplication
 	hashMap := make(map[string][]FileHash)
 
 	for _, fh := range fileHashes {
@@ -388,10 +425,83 @@ func findDuplicates(fileHashes []FileHash) []DuplicateGroup {
 				Hash:  hash,
 				Size:  files[0].Size,
 				Files: files,
+				Similarity: 100.0, // Exact match
 			})
 		}
 	}
 
+	return duplicates
+}
+
+// findPerceptualDuplicates groups similar images together
+func findPerceptualDuplicates(fileHashes []FileHash) []DuplicateGroup {
+	var imageFiles []FileHash
+	var regularFiles []FileHash
+	
+	// Separate images from regular files
+	for _, fh := range fileHashes {
+		if fh.PHash != "" {
+			imageFiles = append(imageFiles, fh)
+		} else {
+			regularFiles = append(regularFiles, fh)
+		}
+	}
+	
+	// Group regular files by exact hash (standard dedup)
+	var duplicates []DuplicateGroup
+	hashMap := make(map[string][]FileHash)
+	for _, fh := range regularFiles {
+		hashMap[fh.Hash] = append(hashMap[fh.Hash], fh)
+	}
+	for hash, files := range hashMap {
+		if len(files) > 1 {
+			duplicates = append(duplicates, DuplicateGroup{
+				Hash:  hash,
+				Size:  files[0].Size,
+				Files: files,
+				Similarity: 100.0,
+			})
+		}
+	}
+	
+	// Group images by perceptual similarity
+	visited := make(map[int]bool)
+	for i := 0; i < len(imageFiles); i++ {
+		if visited[i] {
+			continue
+		}
+		
+		group := []FileHash{imageFiles[i]}
+		visited[i] = true
+		
+		for j := i + 1; j < len(imageFiles); j++ {
+			if visited[j] {
+				continue
+			}
+			
+			dist := hammingDistance(imageFiles[i].PHash, imageFiles[j].PHash)
+			if dist >= 0 && dist <= cfg.SimilarityThreshold {
+				group = append(group, imageFiles[j])
+				visited[j] = true
+			}
+		}
+		
+		if len(group) > 1 {
+			// Calculate average similarity
+			avgSimilarity := 100.0 - (float64(cfg.SimilarityThreshold) / 64.0 * 100.0)
+			if avgSimilarity < 50 {
+				avgSimilarity = 50 + float64(cfg.SimilarityThreshold)
+			}
+			
+			duplicates = append(duplicates, DuplicateGroup{
+				Hash:  imageFiles[i].PHash, // Use perceptual hash as group ID
+				Size:  imageFiles[i].Size,
+				Files: group,
+				Similarity: avgSimilarity,
+			})
+		}
+	}
+	
 	return duplicates
 }
 
@@ -403,8 +513,20 @@ func reportDuplicates(duplicates []DuplicateGroup) {
 
 	totalDuplicates := 0
 	totalSpace := int64(0)
+	
+	// Count perceptual vs exact matches
+	perceptualGroups := 0
+	for _, group := range duplicates {
+		if group.Similarity < 100.0 {
+			perceptualGroups++
+		}
+	}
 
-	log.Println("\n👯 Duplicate Files:")
+	if cfg.PerceptualMode && perceptualGroups > 0 {
+		log.Println("\n🖼️  Similar Images Found:")
+	} else {
+		log.Println("\n👯 Duplicate Files:")
+	}
 	log.Println(strings.Repeat("=", 70))
 
 	for i, group := range duplicates {
@@ -418,6 +540,11 @@ func reportDuplicates(duplicates []DuplicateGroup) {
 		log.Printf("\n[%d] Hash: %s", i+1, group.Hash[:16]+"...")
 		log.Printf("    Size: %s", formatBytes(group.Size))
 		log.Printf("    Files: %d (keeping 1, removing %d)", len(group.Files), numDuplicates)
+		
+		// Show similarity for perceptual matches
+		if group.Similarity < 100.0 {
+			log.Printf("    Similarity: %.0f%% (perceptual match)", group.Similarity)
+		}
 
 		for j, fh := range group.Files {
 			prefix := "    ✓ KEEP"
@@ -429,8 +556,13 @@ func reportDuplicates(duplicates []DuplicateGroup) {
 	}
 
 	log.Println("\n" + strings.Repeat("=", 70))
-	log.Printf("📊 Summary: %d duplicate files, %s of space can be freed",
-		totalDuplicates, formatBytes(totalSpace))
+	if cfg.PerceptualMode && perceptualGroups > 0 {
+		log.Printf("📊 Summary: %d duplicates/similar files, %s of space can be freed (%d perceptual groups)",
+			totalDuplicates, formatBytes(totalSpace), perceptualGroups)
+	} else {
+		log.Printf("📊 Summary: %d duplicate files, %s of space can be freed",
+			totalDuplicates, formatBytes(totalSpace))
+	}
 }
 
 func selectFileToKeep(group DuplicateGroup) int {
