@@ -3,6 +3,7 @@ package main
 import (
 	"image"
 	"image/color"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -192,9 +193,7 @@ func applyDCT(pixels [][]float64) [][]float64 {
 }
 
 func cosine(x float64) float64 {
-	// Simple cosine - Go's math package would be better but keeping dependencies minimal
-	// This is a placeholder - in real implementation use math.Cos
-	return 1.0 - x*x/2.0 + x*x*x*x/24.0 // Taylor series approximation
+	return math.Cos(x)
 }
 
 // hammingDistance calculates the Hamming distance between two hash strings
