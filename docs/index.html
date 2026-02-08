@@ -454,6 +454,57 @@
         }
         
         /* Responsive */
+        /* Tablet styles (769px - 1024px) */
+        @media (max-width: 1024px) and (min-width: 769px) {
+            .hero {
+                padding: 80px 0 50px;
+            }
+            
+            .hero h1 {
+                font-size: 3rem;
+            }
+            
+            .hero .tagline {
+                font-size: 1.3rem;
+                padding: 0 20px;
+            }
+            
+            .feature-grid {
+                grid-template-columns: repeat(2, 1fr);
+                gap: 24px;
+            }
+            
+            .feature-card {
+                padding: 28px;
+            }
+            
+            .pricing-grid {
+                grid-template-columns: 1fr;
+                max-width: 400px;
+            }
+            
+            .pricing-card.featured {
+                transform: none;
+            }
+            
+            .pricing-card.featured:hover {
+                transform: translateY(-8px);
+            }
+            
+            .terminal {
+                margin: 0 20px;
+            }
+            
+            .table-wrapper {
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+            }
+            
+            table {
+                min-width: 100%;
+            }
+        }
+        
         @media (max-width: 768px) {
             .hero {
                 padding: 60px 0 40px;
@@ -519,6 +570,10 @@
                 transform: none;
             }
             
+            .pricing-card.featured:hover {
+                transform: translateY(-8px);
+            }
+            
             .terminal {
                 margin: 0 10px;
                 border-radius: 8px;
@@ -528,12 +583,14 @@
                 padding: 16px;
                 font-size: 12px;
                 overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
             }
             
             .table-wrapper {
                 overflow-x: auto;
                 margin: 0 -20px;
                 padding: 0 20px;
+                -webkit-overflow-scrolling: touch;
             }
             
             table {
