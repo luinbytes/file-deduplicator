@@ -4,10 +4,14 @@ A fast, parallel CLI tool to find and remove duplicate files using SHA256 hashin
 
 ## What's New in v3.0
 
-### 🖼️ Perceptual Image Deduplication
+### 🖼️ Perceptual Image Deduplication (IMPROVED!)
 The killer feature that sets this apart from every other duplicate finder:
 
 - **Find similar images**, not just exact duplicates — catch those 5 sunset shots you took
+- **Now with advanced preprocessing** to detect filtered/edited images:
+  - Gamma correction for brightness normalization
+  - Histogram equalization for color balance
+  - Color-aware blur for filter robustness
 - **Multiple algorithms**: dHash (fast), aHash (balanced), pHash (most robust)
 - **Configurable similarity**: Adjust threshold to match your needs
 - **Smart grouping**: Groups similar photos together with similarity percentage
@@ -16,6 +20,7 @@ The killer feature that sets this apart from every other duplicate finder:
 ### Why This Matters
 Other tools only catch exact duplicates. This catches:
 - Photos with slight edits (filters, crops, compression)
+- **Instagram-style filters** (brightness, contrast, saturation adjustments)
 - Screenshots saved multiple times
 - Downloaded images with different filenames
 - Burst-mode photos that are nearly identical
@@ -122,6 +127,18 @@ file-deduplicator -dir ~/Pictures -pattern "*.jpg" -perceptual
 file-deduplicator -dir ~/Screenshots -pattern "*.png" -perceptual
 ```
 
+**Compare two specific images:**
+```bash
+# Compare two images directly
+file-deduplicator -compare photo1.jpg,photo2.jpg
+
+# With specific algorithm
+file-deduplicator -compare photo1.jpg,photo2.jpg -phash-algo phash
+
+# Using -compare-with syntax
+file-deduplicator -compare photo1.jpg -compare-with photo2.jpg
+```
+
 ## Options
 
 ### Standard Options
@@ -141,6 +158,9 @@ file-deduplicator -dir ~/Screenshots -pattern "*.png" -perceptual
 | `-pattern string` | `""` | File pattern (e.g., `*.jpg`) |
 | `-export` | `false` | Export JSON report |
 | `-undo` | `false` | View undo log |
+| `-no-emoji` | `false` | Disable emoji output |
+| `-compare` | `""` | Compare two images (img1,img2) |
+| `-compare-with` | `""` | Second image for comparison |
 
 ### Perceptual Options (NEW)
 

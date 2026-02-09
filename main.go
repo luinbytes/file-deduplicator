@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	version                = "3.0.0"
+	version                = "3.1.0"
 	reportFile             = ".deduplicator_report.json"
 	undoFile               = ".deduplicator_undo.json"
 	maxHistory             = 100
@@ -64,6 +64,9 @@ type Config struct {
 	PerceptualMode bool   // Enable perceptual hashing for images
 	PHashAlgorithm string // "dhash", "ahash", "phash"
 	SimilarityThreshold int // Hamming distance threshold (0-64, default 10)
+	// Image comparison flags
+	CompareImg1 string // First image for comparison
+	CompareImg2 string // Second image for comparison
 }
 
 var (
@@ -98,6 +101,10 @@ func init() {
 	flag.BoolVar(&cfg.PerceptualMode, "perceptual", false, "Enable perceptual hashing for images (finds similar images, not just exact duplicates)")
 	flag.StringVar(&cfg.PHashAlgorithm, "phash-algo", "dhash", "Perceptual hash algorithm: dhash (fast), ahash, phash (robust)")
 	flag.IntVar(&cfg.SimilarityThreshold, "similarity", 10, "Similarity threshold (0-64). Lower = stricter. Default 10.")
+	
+	// Image comparison flags
+	flag.StringVar(&cfg.CompareImg1, "compare", "", "Compare two images (format: img1,img2 or use with -compare-with)")
+	flag.StringVar(&cfg.CompareImg2, "compare-with", "", "Second image for comparison (use with -compare)")
 }
 
 func main() {
@@ -107,6 +114,14 @@ func main() {
 	if cfg.UndoLast {
 		if err := undoLast(); err != nil {
 			log.Fatalf("❌ Error undoing: %v", err)
+		}
+		return
+	}
+
+	// Handle image comparison
+	if cfg.CompareImg1 != "" {
+		if err := compareImagesCLI(); err != nil {
+			log.Fatalf("❌ Error comparing images: %v", err)
 		}
 		return
 	}
@@ -816,4 +831,105 @@ func formatBytes(bytes int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+}
+
+// compareImagesCLI handles the -compare flag for comparing two images
+func compareImagesCLI() error {
+	// Parse the compare argument (can be comma-separated or use -compare-with)
+	var img1, img2 string
+	
+	if strings.Contains(cfg.CompareImg1, ",") {
+		parts := strings.SplitN(cfg.CompareImg1, ",", 2)
+		img1 = strings.TrimSpace(parts[0])
+		img2 = strings.TrimSpace(parts[1])
+	} else if cfg.CompareImg2 != "" {
+		img1 = cfg.CompareImg1
+		img2 = cfg.CompareImg2
+	} else {
+		return fmt.Errorf("usage: -compare img1,img2 OR -compare img1 -compare-with img2")
+	}
+
+	// Validate files exist
+	for _, path := range []string{img1, img2} {
+		if _, err := os.Stat(path); err != nil {
+			return fmt.Errorf("cannot access %s: %w", path, err)
+		}
+		if !isImageFile(path) {
+			return fmt.Errorf("%s is not a supported image file", path)
+		}
+	}
+
+	log.Printf("Comparing images...")
+	log.Printf("   Image 1: %s", img1)
+	log.Printf("   Image 2: %s", img2)
+	log.Printf("   Algorithm: %s", cfg.PHashAlgorithm)
+
+	// Compute hashes for both images using all three algorithms
+	algorithms := []string{"dhash", "ahash", "phash"}
+	thresholds := map[string]int{"dhash": 10, "ahash": 12, "phash": 8}
+
+	fmt.Println()
+	fmt.Println(strings.Repeat("=", 70))
+	fmt.Println("IMAGE COMPARISON RESULTS")
+	fmt.Println(strings.Repeat("=", 70))
+
+	for _, algo := range algorithms {
+		hash1, err := computePerceptualHash(img1, algo)
+		if err != nil {
+			return fmt.Errorf("failed to hash %s: %w", img1, err)
+		}
+
+		hash2, err := computePerceptualHash(img2, algo)
+		if err != nil {
+			return fmt.Errorf("failed to hash %s: %w", img2, err)
+		}
+
+		dist := hammingDistance(hash1, hash2)
+		similarity := 100.0 - (float64(dist)/64.0*100.0)
+		threshold := thresholds[algo]
+		isSimilar := dist <= threshold
+
+		fmt.Printf("\n%s (%s):\n", strings.ToUpper(algo), algoDescriptions[algo])
+		fmt.Printf("  Hash 1: %s...\n", hash1[:16])
+		fmt.Printf("  Hash 2: %s...\n", hash2[:16])
+		fmt.Printf("  Hamming Distance: %d/64\n", dist)
+		fmt.Printf("  Similarity: %.1f%%\n", similarity)
+		fmt.Printf("  Threshold: %d\n", threshold)
+		
+		if isSimilar {
+			fmt.Printf("  Result: SIMILAR\n")
+		} else {
+			fmt.Printf("  Result: DIFFERENT\n")
+		}
+	}
+
+	fmt.Println()
+	fmt.Println(strings.Repeat("=", 70))
+	fmt.Println("RECOMMENDATION")
+	fmt.Println(strings.Repeat("=", 70))
+	
+	// Use the requested algorithm for final recommendation
+	reqHash1, _ := computePerceptualHash(img1, cfg.PHashAlgorithm)
+	reqHash2, _ := computePerceptualHash(img2, cfg.PHashAlgorithm)
+	reqDist := hammingDistance(reqHash1, reqHash2)
+	reqSimilarity := 100.0 - (float64(reqDist)/64.0*100.0)
+	
+	if reqDist <= cfg.SimilarityThreshold {
+		fmt.Printf("Images are SIMILAR (using %s, threshold %d)\n", 
+			cfg.PHashAlgorithm, cfg.SimilarityThreshold)
+		fmt.Printf("   Similarity: %.1f%% (distance: %d)\n", reqSimilarity, reqDist)
+	} else {
+		fmt.Printf("Images are DIFFERENT (using %s, threshold %d)\n",
+			cfg.PHashAlgorithm, cfg.SimilarityThreshold)
+		fmt.Printf("   Similarity: %.1f%% (distance: %d)\n", reqSimilarity, reqDist)
+	}
+	fmt.Println()
+
+	return nil
+}
+
+var algoDescriptions = map[string]string{
+	"dhash": "Difference Hash - Fast, good for near-duplicates",
+	"ahash": "Average Hash - Balanced speed and accuracy",
+	"phash": "Perceptual Hash - Most robust, slower",
 }
