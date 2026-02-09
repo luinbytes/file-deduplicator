@@ -59,6 +59,7 @@ type Config struct {
 	FilePattern    string // Only include files matching this pattern
 	ExportReport   bool
 	UndoLast       bool
+	NoEmoji        bool   // Disable emoji output for cleaner logs
 	// Perceptual hashing options
 	PerceptualMode bool   // Enable perceptual hashing for images
 	PHashAlgorithm string // "dhash", "ahash", "phash"
@@ -68,6 +69,14 @@ type Config struct {
 var (
 	cfg Config
 )
+
+// emoji returns the emoji if NoEmoji is false, otherwise returns empty string
+func emoji(e string) string {
+	if cfg.NoEmoji {
+		return ""
+	}
+	return e + " "
+}
 
 func init() {
 	flag.StringVar(&cfg.Dir, "dir", ".", "Directory to scan for duplicates")
@@ -83,6 +92,7 @@ func init() {
 	flag.StringVar(&cfg.FilePattern, "pattern", "", "File pattern to match (e.g., *.jpg, *.pdf)")
 	flag.BoolVar(&cfg.ExportReport, "export", false, "Export duplicate report to JSON file")
 	flag.BoolVar(&cfg.UndoLast, "undo", false, "Undo last operation")
+	flag.BoolVar(&cfg.NoEmoji, "no-emoji", false, "Disable emoji output for cleaner logs")
 	
 	// Perceptual hashing flags
 	flag.BoolVar(&cfg.PerceptualMode, "perceptual", false, "Enable perceptual hashing for images (finds similar images, not just exact duplicates)")
