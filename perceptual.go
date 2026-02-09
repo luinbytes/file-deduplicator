@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"golang.org/x/image/draw"
 	_ "golang.org/x/image/webp"
 )
 
@@ -21,8 +22,11 @@ type PerceptualHash struct {
 // dHash computes a difference hash (dHash) for an image
 // This is fast and good for detecting near-duplicate images
 func dHash(img image.Image) (string, error) {
+	// Apply blur preprocessing to reduce filter noise
+	blurred := applyBlur(img)
+	
 	// Resize to 9x8 for dHash (we need 9 width to get 8 comparisons per row)
-	resized := resizeImage(img, 9, 8)
+	resized := resizeImage(blurred, 9, 8)
 	
 	// Convert to grayscale and compute hash
 	var hashBits []byte
@@ -44,11 +48,14 @@ func dHash(img image.Image) (string, error) {
 	return string(hashBits), nil
 }
 
-// aHash computes average hash (aHash) for an image  
+// aHash computes average hash (aHash) for an image
 // Good for detecting images with minor modifications
 func aHash(img image.Image) (string, error) {
+	// Apply blur preprocessing to reduce filter noise
+	blurred := applyBlur(img)
+
 	// Resize to 8x8
-	resized := resizeImage(img, 8, 8)
+	resized := resizeImage(blurred, 8, 8)
 	
 	// Calculate average brightness
 	var total int64
@@ -82,8 +89,11 @@ func aHash(img image.Image) (string, error) {
 // pHash computes perceptual hash (pHash) using DCT
 // More robust but slower - simplified version
 func pHash(img image.Image) (string, error) {
+	// Apply blur preprocessing to reduce filter noise
+	blurred := applyBlur(img)
+
 	// Resize to 32x32 for better frequency analysis
-	resized := resizeImage(img, 32, 32)
+	resized := resizeImage(blurred, 32, 32)
 	
 	// Convert to grayscale float64 for DCT
 	pixels := make([][]float64, 32)
@@ -136,25 +146,48 @@ func grayscale(c color.Color) int {
 	return int(0.299*float64(r/256) + 0.587*float64(g/256) + 0.114*float64(b/256))
 }
 
-// resizeImage resizes an image to the specified dimensions using simple nearest neighbor
-// For hashing purposes, we don't need high quality interpolation
+// resizeImage resizes an image to the specified dimensions using high-quality interpolation
+// Uses Catmull-Rom for better perceptual hashing accuracy
 func resizeImage(img image.Image, width, height int) image.Image {
-	bounds := img.Bounds()
+	srcBounds := img.Bounds()
 	dst := image.NewGray(image.Rect(0, 0, width, height))
 	
-	scaleX := float64(bounds.Dx()) / float64(width)
-	scaleY := float64(bounds.Dy()) / float64(height)
+	// Use Catmull-Rom interpolation for high-quality downsampling
+	// This preserves more perceptual information than nearest-neighbor
+	draw.CatmullRom.Scale(dst, dst.Bounds(), img, srcBounds, draw.Over, nil)
 	
-	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
-			srcX := int(float64(x) * scaleX)
-			srcY := int(float64(y) * scaleY)
-			c := img.At(bounds.Min.X+srcX, bounds.Min.Y+srcY)
-			dst.Set(x, y, c)
+	return dst
+}
+
+// applyBlur applies a simple box blur to reduce noise before hashing
+// This helps detect similar images even after filters/edits
+func applyBlur(img image.Image) image.Image {
+	bounds := img.Bounds()
+	blurred := image.NewGray(bounds)
+	
+	// Simple 3x3 box blur
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			var sum int
+			var count int
+			
+			// Sample 3x3 neighborhood
+			for dy := -1; dy <= 1; dy++ {
+				for dx := -1; dx <= 1; dx++ {
+					nx, ny := x+dx, y+dy
+					if nx >= bounds.Min.X && nx < bounds.Max.X && ny >= bounds.Min.Y && ny < bounds.Max.Y {
+						sum += grayscale(img.At(nx, ny))
+						count++
+					}
+				}
+			}
+			
+			avg := uint8(sum / count)
+			blurred.SetGray(x, y, color.Gray{Y: avg})
 		}
 	}
 	
-	return dst
+	return blurred
 }
 
 // applyDCT applies Discrete Cosine Transform (simplified version)
