@@ -24,7 +24,7 @@ const (
 	reportFile             = ".deduplicator_report.json"
 	undoFile               = ".deduplicator_undo.json"
 	maxHistory             = 100
-	progressUpdateInterval  = 2 * time.Second
+	progressUpdateInterval  = 1 * time.Second
 )
 
 // FileHash represents a file and its hash
@@ -34,6 +34,29 @@ type FileHash struct {
 	Hash     string
 	ModTime  time.Time
 	PHash    string  // Perceptual hash for images
+}
+
+// Statistics tracks detailed operation metrics
+type Statistics struct {
+	ScanStart      time.Time
+	ScanEnd        time.Time
+	HashStart      time.Time
+	HashEnd        time.Time
+	ProcessStart   time.Time
+	ProcessEnd     time.Time
+	TotalFiles     int
+	TotalBytes     int64
+	FilesByExt     map[string]int
+	DuplicateFiles int
+	DuplicateBytes int64
+	ImageFiles     int
+}
+
+// NewStatistics creates a new Statistics object
+func NewStatistics() *Statistics {
+	return &Statistics{
+		FilesByExt: make(map[string]int),
+	}
 }
 
 // DuplicateGroup represents a group of duplicate files
@@ -128,25 +151,25 @@ func main() {
 
 	log.SetFlags(log.Ltime)
 
-	log.Printf("🔍 File Deduplicator v%s - Starting...", version)
+	log.Printf("%sFile Deduplicator v%s - Starting...", emoji("🔍"), version)
 	if cfg.Verbose {
-		log.Printf("📁 Scanning directory: %s", cfg.Dir)
-		log.Printf("🔄 Recursive: %v", cfg.Recursive)
-		log.Printf("👷 Workers: %d", cfg.Workers)
-		log.Printf("📏 Min size: %d bytes", cfg.MinSize)
-		log.Printf("🔐 Hash algorithm: %s", cfg.HashAlgorithm)
+		log.Printf("%sScanning directory: %s", emoji("📁"), cfg.Dir)
+		log.Printf("%sRecursive: %v", emoji("🔄"), cfg.Recursive)
+		log.Printf("%sWorkers: %d", emoji("👷"), cfg.Workers)
+		log.Printf("%sMin size: %d bytes", emoji("📏"), cfg.MinSize)
+		log.Printf("%sHash algorithm: %s", emoji("🔐"), cfg.HashAlgorithm)
 		if cfg.FilePattern != "" {
-			log.Printf("🎯 File pattern: %s", cfg.FilePattern)
+			log.Printf("%sFile pattern: %s", emoji("🎯"), cfg.FilePattern)
 		}
 		if cfg.MoveTo != "" {
-			log.Printf("📦 Move duplicates to: %s", cfg.MoveTo)
+			log.Printf("%sMove duplicates to: %s", emoji("📦"), cfg.MoveTo)
 		}
-		log.Printf("✋ Keep criteria: %s", cfg.KeepCriteria)
+		log.Printf("%sKeep criteria: %s", emoji("✋"), cfg.KeepCriteria)
 		if cfg.Interactive {
-			log.Printf("❓ Interactive mode enabled")
+			log.Printf("%sInteractive mode enabled", emoji("❓"))
 		}
 		if cfg.PerceptualMode {
-			log.Printf("🖼️  Perceptual mode enabled (%s, threshold: %d)", cfg.PHashAlgorithm, cfg.SimilarityThreshold)
+			log.Printf("%sPerceptual mode enabled (%s, threshold: %d)", emoji("🖼️"), cfg.PHashAlgorithm, cfg.SimilarityThreshold)
 		}
 	}
 
@@ -158,7 +181,7 @@ func main() {
 		log.Fatalf("❌ Error scanning files: %v", err)
 	}
 
-	log.Printf("📊 Found %d files", len(files))
+	log.Printf("%sFound %d files", emoji("📊"), len(files))
 
 	// Filter by minimum size
 	var filteredFiles []string
@@ -166,7 +189,7 @@ func main() {
 		info, err := os.Stat(file)
 		if err != nil {
 			if cfg.Verbose {
-				log.Printf("⚠️  Could not stat %s: %v", file, err)
+				log.Printf("%sCould not stat %s: %v", emoji("⚠️"), file, err)
 			}
 			continue
 		}
@@ -175,12 +198,12 @@ func main() {
 			if cfg.FilePattern != "" {
 				matched, err := filepath.Match(cfg.FilePattern, filepath.Base(file))
 				if err != nil {
-					log.Printf("⚠️  Invalid pattern %s: %v", cfg.FilePattern, err)
+					log.Printf("%sInvalid pattern %s: %v", emoji("⚠️"), cfg.FilePattern, err)
 					continue
 				}
 				if !matched {
 					if cfg.Verbose {
-						log.Printf("🚫 Skipping non-matching file: %s", file)
+						log.Printf("%sSkipping non-matching file: %s", emoji("🚫"), file)
 					}
 					continue
 				}
@@ -188,7 +211,7 @@ func main() {
 			filteredFiles = append(filteredFiles, file)
 		}
 	}
-	log.Printf("📏 After filters: %d files", len(filteredFiles))
+	log.Printf("%sAfter filters: %d files", emoji("📏"), len(filteredFiles))
 
 	// Compute hashes in parallel
 	fileHashes, err := computeHashes(filteredFiles)
@@ -198,11 +221,11 @@ func main() {
 	if !cfg.Verbose {
 		fmt.Fprintln(os.Stderr) // Newline after progress bar
 	}
-	log.Printf("🔐 Computed %d hashes", len(fileHashes))
+	log.Printf("%sComputed %d hashes", emoji("🔐"), len(fileHashes))
 
 	// Find duplicates
 	duplicates := findDuplicates(fileHashes)
-	log.Printf("👯 Found %d duplicate groups", len(duplicates))
+	log.Printf("%sFound %d duplicate groups", emoji("👯"), len(duplicates))
 
 	// Report duplicates
 	reportDuplicates(duplicates)
@@ -210,9 +233,9 @@ func main() {
 	// Export report if requested
 	if cfg.ExportReport {
 		if err := exportReport(duplicates); err != nil {
-			log.Printf("⚠️  Failed to export report: %v", err)
+			log.Printf("%sFailed to export report: %v", emoji("⚠️"), err)
 		} else {
-			log.Printf("📄 Report exported to %s", reportFile)
+			log.Printf("%sReport exported to %s", emoji("📄"), reportFile)
 		}
 	}
 
@@ -224,7 +247,7 @@ func main() {
 	}
 
 	elapsed := time.Since(startTime)
-	log.Printf("✅ Complete in %v", elapsed)
+	log.Printf("%sComplete in %v", emoji("✅"), elapsed)
 }
 
 func scanFiles(dir string, recursive bool) ([]string, error) {
@@ -259,7 +282,7 @@ func scanFiles(dir string, recursive bool) ([]string, error) {
 			// Skip hidden directories
 			if strings.HasPrefix(filepath.Base(path), ".") {
 				if cfg.Verbose {
-					log.Printf("🚫 Skipping hidden directory: %s", path)
+					log.Printf("%sSkipping hidden directory: %s", emoji("🚫"), path)
 				}
 				return filepath.SkipDir
 			}
@@ -273,7 +296,7 @@ func scanFiles(dir string, recursive bool) ([]string, error) {
 		// Skip hidden files
 		if strings.HasPrefix(filepath.Base(path), ".") {
 			if cfg.Verbose {
-				log.Printf("🚫 Skipping hidden file: %s", path)
+				log.Printf("%sSkipping hidden file: %s", emoji("🚫"), path)
 			}
 			return nil
 		}
@@ -301,12 +324,12 @@ func computeHashes(files []string) ([]FileHash, error) {
 	var hashedMutex sync.Mutex
 	totalFiles := len(files)
 	lastProgressUpdate := time.Now()
-	const progressUpdateInterval = 2 * time.Second
+	startTime := time.Now()
 
 	// Start worker goroutines
 	for i := 0; i < cfg.Workers; i++ {
 		wg.Add(1)
-		go worker(&wg, fileChan, resultChan, errorChan, &hashedCount, &hashedMutex, &lastProgressUpdate, totalFiles)
+		go worker(&wg, fileChan, resultChan, errorChan, &hashedCount, &hashedMutex, &lastProgressUpdate, totalFiles, startTime)
 	}
 
 	// Send files to workers
@@ -333,14 +356,21 @@ func computeHashes(files []string) ([]FileHash, error) {
 	// Check for errors
 	for err := range errorChan {
 		if err != nil {
-			log.Printf("⚠️  Error: %v", err)
+			log.Printf("%sError: %v", emoji("⚠️"), err)
 		}
+	}
+
+	// Final progress update
+	if !cfg.Verbose && totalFiles > 0 {
+		elapsed := time.Since(startTime).Seconds()
+		fmt.Fprintf(os.Stderr, "\r%s%s %d/%d (%.1f%%) Completed in %s\n",
+			emoji("✅"), emoji("▏"), totalFiles, totalFiles, 100.0, formatDuration(elapsed))
 	}
 
 	return fileHashes, nil
 }
 
-func worker(wg *sync.WaitGroup, fileChan <-chan string, resultChan chan<- FileHash, errorChan chan<- error, hashedCount *int, hashedMutex *sync.Mutex, lastProgressUpdate *time.Time, totalFiles int) {
+func worker(wg *sync.WaitGroup, fileChan <-chan string, resultChan chan<- FileHash, errorChan chan<- error, hashedCount *int, hashedMutex *sync.Mutex, lastProgressUpdate *time.Time, totalFiles int, startTime time.Time) {
 	defer wg.Done()
 
 	for file := range fileChan {
@@ -358,7 +388,7 @@ func worker(wg *sync.WaitGroup, fileChan <-chan string, resultChan chan<- FileHa
 			if err != nil {
 				// Log error but continue with regular hash
 				if cfg.Verbose {
-					log.Printf("⚠️  Could not compute perceptual hash for %s: %v", file, err)
+					log.Printf("%sCould not compute perceptual hash for %s: %v", emoji("⚠️"), file, err)
 				}
 			}
 		}
@@ -391,11 +421,73 @@ func worker(wg *sync.WaitGroup, fileChan <-chan string, resultChan chan<- FileHa
 			if cfg.Verbose {
 				log.Printf("🔐 Hashed %d/%d files (%.1f%%)", currentHashed, totalFiles, float64(currentHashed)*100/float64(totalFiles))
 			} else {
-				percentage := float64(currentHashed) * 100 / float64(totalFiles)
-				fmt.Fprintf(os.Stderr, "\r🔐 Hashing: %d/%d files (%.1f%%)", currentHashed, totalFiles, percentage)
+				printProgress(currentHashed, totalFiles, startTime)
 			}
 		}
 	}
+}
+
+// printProgress displays a progress bar with ETA
+func printProgress(current, total int, startTime time.Time) {
+	percentage := float64(current) * 100 / float64(total)
+	barWidth := 20
+	filled := int(percentage / 100 * float64(barWidth))
+	empty := barWidth - filled
+
+	// Choose bar characters based on emoji setting
+	var filledChar, emptyChar, modeIcon string
+	if cfg.NoEmoji {
+		filledChar = "="
+		emptyChar = " "
+	} else {
+		filledChar = "█"
+		emptyChar = "░"
+	}
+
+	// Add perceptual mode indicator
+	if cfg.PerceptualMode {
+		if cfg.NoEmoji {
+			modeIcon = "[IMG]"
+		} else {
+			modeIcon = emoji("🖼️")
+		}
+	}
+
+	bar := "["
+	for i := 0; i < filled; i++ {
+		bar += filledChar
+	}
+	for i := 0; i < empty; i++ {
+		bar += emptyChar
+	}
+	bar += "]"
+
+	// Calculate ETA
+	elapsed := time.Since(startTime).Seconds()
+	var eta string
+	if current > 0 {
+		etaSeconds := float64(total-current) * (elapsed / float64(current))
+		eta = formatDuration(etaSeconds)
+	} else {
+		eta = "..."
+	}
+
+	// Print progress with ETA and mode indicator
+	fmt.Fprintf(os.Stderr, "\r%s%s%s%s %d/%d (%.1f%%) ETA: %s", emoji("🔐"), modeIcon, bar, emoji("▏"), current, total, percentage, eta)
+}
+
+// formatDuration converts seconds to a human-readable duration
+func formatDuration(seconds float64) string {
+	if seconds < 60 {
+		return fmt.Sprintf("%.0fs", seconds)
+	}
+	minutes := int(seconds / 60)
+	if minutes < 60 {
+		return fmt.Sprintf("%dm %ds", minutes, int(seconds)%60)
+	}
+	hours := minutes / 60
+	minutes = minutes % 60
+	return fmt.Sprintf("%dh %dm", hours, minutes)
 }
 
 func getHasher() hash.Hash {
@@ -548,9 +640,9 @@ func reportDuplicates(duplicates []DuplicateGroup) {
 	}
 
 	if cfg.PerceptualMode && perceptualGroups > 0 {
-		log.Println("\n🖼️  Similar Images Found:")
+		log.Printf("\n%sSimilar Images Found:", emoji("🖼️"))
 	} else {
-		log.Println("\n👯 Duplicate Files:")
+		log.Printf("\n%sDuplicate Files:", emoji("👯"))
 	}
 	log.Println(strings.Repeat("=", 70))
 
@@ -565,16 +657,16 @@ func reportDuplicates(duplicates []DuplicateGroup) {
 		log.Printf("\n[%d] Hash: %s", i+1, group.Hash[:16]+"...")
 		log.Printf("    Size: %s", formatBytes(group.Size))
 		log.Printf("    Files: %d (keeping 1, removing %d)", len(group.Files), numDuplicates)
-		
+
 		// Show similarity for perceptual matches
 		if group.Similarity < 100.0 {
 			log.Printf("    Similarity: %.0f%% (perceptual match)", group.Similarity)
 		}
 
 		for j, fh := range group.Files {
-			prefix := "    ✓ KEEP"
+			prefix := fmt.Sprintf("    %sKEEP", emoji("✓"))
 			if j != keepIdx {
-				prefix = "    ✗ DELETE"
+				prefix = fmt.Sprintf("    %sDELETE", emoji("✗"))
 			}
 			log.Printf("%s %s (modified: %s)", prefix, fh.Path, fh.ModTime.Format("2006-01-02 15:04:05"))
 		}
@@ -582,11 +674,11 @@ func reportDuplicates(duplicates []DuplicateGroup) {
 
 	log.Println("\n" + strings.Repeat("=", 70))
 	if cfg.PerceptualMode && perceptualGroups > 0 {
-		log.Printf("📊 Summary: %d duplicates/similar files, %s of space can be freed (%d perceptual groups)",
-			totalDuplicates, formatBytes(totalSpace), perceptualGroups)
+		log.Printf("%sSummary: %d duplicates/similar files, %s of space can be freed (%d perceptual groups)",
+			emoji("📊"), totalDuplicates, formatBytes(totalSpace), perceptualGroups)
 	} else {
-		log.Printf("📊 Summary: %d duplicate files, %s of space can be freed",
-			totalDuplicates, formatBytes(totalSpace))
+		log.Printf("%sSummary: %d duplicate files, %s of space can be freed",
+			emoji("📊"), totalDuplicates, formatBytes(totalSpace))
 	}
 }
 
@@ -731,9 +823,9 @@ func processDuplicates(duplicates []DuplicateGroup) error {
 	// Save undo log
 	if len(undoLog) > 0 && cfg.MoveTo == "" {
 		if err := saveUndoLog(undoLog); err != nil {
-			log.Printf("⚠️  Failed to save undo log: %v", err)
+			log.Printf("%sFailed to save undo log: %v", emoji("⚠️"), err)
 		} else {
-			log.Printf("💾 Undo log saved (use -undo to restore)")
+			log.Printf("%sUndo log saved (use -undo to restore)", emoji("💾"))
 		}
 	}
 
@@ -831,6 +923,67 @@ func formatBytes(bytes int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+}
+
+// printStatistics displays detailed operation statistics
+func printStatistics(stats *Statistics) {
+	scanDuration := stats.ScanEnd.Sub(stats.ScanStart).Seconds()
+	hashDuration := stats.HashEnd.Sub(stats.HashStart).Seconds()
+	processDuration := stats.ProcessEnd.Sub(stats.ProcessStart).Seconds()
+	totalDuration := stats.ProcessEnd.Sub(stats.ScanStart).Seconds()
+
+	if cfg.Verbose || !cfg.NoEmoji {
+		log.Println("")
+		log.Println("📊 Detailed Statistics:")
+		log.Println("─────────────────────────────────────────────────────")
+		log.Printf("  Files scanned:      %d", stats.TotalFiles)
+		log.Printf("  Total data size:     %s", formatBytes(stats.TotalBytes))
+		log.Printf("  Duplicate files:     %d", stats.DuplicateFiles)
+		log.Printf("  Duplicate size:      %s", formatBytes(stats.DuplicateBytes))
+		if stats.ImageFiles > 0 {
+			log.Printf("  Image files:        %d", stats.ImageFiles)
+		}
+
+		log.Println("")
+		log.Println("  Time Breakdown:")
+		log.Printf("    Scanning:      %s (%.1f%%)", formatDuration(scanDuration), scanDuration/totalDuration*100)
+		log.Printf("    Hashing:        %s (%.1f%%)", formatDuration(hashDuration), hashDuration/totalDuration*100)
+		log.Printf("    Processing:     %s (%.1f%%)", formatDuration(processDuration), processDuration/totalDuration*100)
+
+		log.Println("")
+		if stats.TotalFiles > 0 {
+			scanRate := float64(stats.TotalFiles) / scanDuration
+			hashRate := float64(stats.TotalFiles) / hashDuration
+			byteRate := float64(stats.TotalBytes) / hashDuration
+
+			log.Printf("  Speed:")
+			log.Printf("    Scanning:      %.0f files/sec", scanRate)
+			log.Printf("    Hashing:       %.0f files/sec", hashRate)
+			log.Printf("    Throughput:    %s/sec", formatBytes(int64(byteRate)))
+		}
+
+		if len(stats.FilesByExt) > 0 {
+			log.Println("")
+			log.Println("  Files by Type:")
+			sortedExts := make([]string, 0, len(stats.FilesByExt))
+			for ext := range stats.FilesByExt {
+				sortedExts = append(sortedExts, ext)
+			}
+			for i, ext := range sortedExts {
+				if i > 9 { // Show top 10 file types
+					break
+				}
+				count := stats.FilesByExt[ext]
+				if ext == "" {
+					ext = "(no extension)"
+				}
+				log.Printf("    %-5s: %d files", ext, count)
+			}
+		}
+
+		log.Println("─────────────────────────────────────────────────────")
+		log.Printf("  Total Time: %s\n", formatDuration(totalDuration))
+	}
 }
 
 // compareImagesCLI handles the -compare flag for comparing two images
