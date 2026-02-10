@@ -254,6 +254,151 @@ This is the same technology used by:
 2. Pattern filtering for specific types: `-pattern "*.pdf"`
 3. Keep criteria: `-keep newest` for backup scenarios
 
+## FAQ
+
+### How is this different from fdupes/rmlint/dupeGuru?
+
+**Exact duplicates**: All tools work similarly - they find files with identical content.
+
+**Similar images**: Only file-deduplicator finds similar images using perceptual hashing. Other tools miss:
+- Photos with edits (filters, crops, compression)
+- Screenshots saved multiple times
+- Burst-mode photos that are nearly identical
+- Downloaded images with different filenames
+
+**Performance**: File-deduplicator uses Go's goroutines for parallel processing, making it faster than most Python-based tools.
+
+### Is it safe to use?
+
+Yes! Safety features built-in:
+- **Dry run mode**: Preview what would happen without changing anything
+- **Move, don't delete**: Keep files safe in a separate folder
+- **Undo tracking**: All operations logged
+- **Export reports**: Full documentation of what was found
+- **Hidden files**: Skipped by default
+
+**Recommendation**: Always run with `-dry-run` first, then `-move-to`, only delete after review.
+
+### How does perceptual hashing work?
+
+1. **Resize** image to small size (8x8 or 9x8 pixels)
+2. **Grayscale** to remove color information
+3. **Compute hash** based on pixel relationships
+4. **Compare** hashes using Hamming distance (0-64)
+5. **Group** images with similar hashes
+
+This technology is used by:
+- Google Image Search
+- TinEye reverse image search
+- Pinterest visual search
+
+### What's the difference between dHash, aHash, and pHash?
+
+| Algorithm | Speed | Accuracy | Best For |
+|-----------|-------|----------|----------|
+| **dHash** (default) | Fastest | Good | Quick scans, large libraries |
+| **aHash** | Fast | Better | Balanced speed/accuracy |
+| **pHash** | Slower | Best | Maximum accuracy, smaller sets |
+
+Start with dHash (default). Switch to pHash if you need maximum accuracy and have time to wait.
+
+### What similarity threshold should I use?
+
+| Threshold | Match Type | Use Case |
+|-----------|-----------|----------|
+| `0-5` | Nearly identical | Strict dedup, minor edits only |
+| `10` (default) | Very similar | Good balance for most cases |
+| `15-20` | Similar | Catches more variations |
+| `25+` | Loosely related | Broad matches, may have false positives |
+
+**Recommendation**: Start at 10, adjust based on results.
+
+### Why is perceptual mode slower?
+
+Perceptual hashing requires:
+1. **Image decoding** (JPEG/PNG/etc → bitmap)
+2. **Preprocessing** (gamma, histogram, blur)
+3. **Hash computation**
+
+These steps take time. Standard SHA256 hashing just reads bytes directly.
+
+**Performance**:
+- Standard mode: ~1000 files/sec per core
+- Perceptual mode: ~200-500 images/sec per core
+
+**Tip**: Use pattern filtering `-pattern "*.jpg"` to only process images when using perceptual mode.
+
+### Can I use this for copyright enforcement?
+
+No. Perceptual hashing is designed for **similarity detection**, not exact matching. It can find similar photos but cannot prove copyright infringement.
+
+For copyright enforcement, you need:
+- Exact byte-level comparison (SHA256)
+- Metadata analysis
+- Legal process
+
+This tool helps with personal file management, not copyright enforcement.
+
+### Is the binary really free?
+
+Yes! You have two options:
+
+**Free (recommended)**:
+- Build from source: `go install github.com/luinbytes/file-deduplicator@latest`
+- All features included
+- Full source code access
+
+**Paid (optional)**:
+- Pre-built binaries: $10 on Gumroad
+- Convenience only (no building required)
+- Supports development
+
+**No feature difference**: Both have 100% feature parity. Like ripgrep, fd, and bat.
+
+### Will this delete my files?
+
+Only if you tell it to! By default:
+
+1. **Dry run mode**: `-dry-run` shows what would happen without changing anything
+2. **Move instead of delete**: `-move-to folder` keeps files safe
+3. **Preview first**: Export report and review before committing
+
+**Recommendation**:
+```bash
+# Step 1: Preview
+file-deduplicator -dir ~/Pictures -perceptual -dry-run -export
+
+# Step 2: Review report
+cat .deduplicator_report.json | jq '.duplicates[]'
+
+# Step 3: Move (safer than delete)
+file-deduplicator -dir ~/Pictures -perceptual -move-to ~/Pictures/Similar
+
+# Step 4: Only after review - delete duplicates in Similar folder
+```
+
+### Can I use this on cloud storage (Google Drive, Dropbox, etc.)?
+
+Yes, with limitations:
+
+**Best approach**:
+1. Sync cloud storage to local folder
+2. Run file-deduplicator on local folder
+3. Changes will sync back to cloud
+
+**Direct cloud access**: Not supported. Cloud APIs don't provide efficient file scanning.
+
+### How do I report a bug or request a feature?
+
+1. **Check existing issues**: [github.com/luinbytes/file-deduplicator/issues](https://github.com/luinbytes/file-deduplicator/issues)
+2. **Open new issue** with:
+   - OS and version: `file-deduplicator --help` shows version
+   - Command used
+   - Expected vs actual behavior
+   - Error messages (if any)
+
+**Feature requests**: Welcome! Describe the use case and why it would be valuable.
+
 ## Troubleshooting
 
 ### "No images processed"
