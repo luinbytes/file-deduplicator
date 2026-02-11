@@ -753,6 +753,22 @@ func processDuplicates(duplicates []DuplicateGroup) error {
 
 	log.Printf("\n🗑️  %s duplicates...", map[bool]string{true: "Moving", false: "Deleting"}[cfg.MoveTo != ""])
 
+	// Warn users about permanent deletion
+	if cfg.Interactive && cfg.MoveTo == "" {
+		log.Println("\n" + strings.Repeat("⚠️", 30))
+		log.Println("⚠️  WARNING: Files will be PERMANENTLY deleted!")
+		log.Println("⚠️  The -undo option only shows what was deleted.")
+		log.Println("⚠️  Use -move-to <folder> to move files instead of deleting.")
+		log.Println("⚠️" + strings.Repeat("=", 55))
+		fmt.Print("Continue with permanent deletion? [y/N]: ")
+		var confirm string
+		fmt.Scanln(&confirm)
+		if strings.ToLower(confirm) != "y" {
+			log.Println("❓ Operation cancelled. No files were deleted.")
+			return nil
+		}
+	}
+
 	for _, group := range duplicates {
 		keepIdx := selectFileToKeep(group)
 
@@ -825,7 +841,7 @@ func processDuplicates(duplicates []DuplicateGroup) error {
 		if err := saveUndoLog(undoLog); err != nil {
 			log.Printf("%sFailed to save undo log: %v", emoji("⚠️"), err)
 		} else {
-			log.Printf("%sUndo log saved (use -undo to restore)", emoji("💾"))
+			log.Printf("%sUndo log saved (use -undo to view - files are NOT recoverable)", emoji("💾"))
 		}
 	}
 
@@ -858,25 +874,56 @@ func undoLast() error {
 		return fmt.Errorf("no undo log found: %w", err)
 	}
 
-	log.Printf("🔄 Undo log found. Note: Files that were deleted cannot be restored (only the metadata is logged).\n")
-	log.Printf("If you used -move-to option, files are in that directory.\n")
-	
-	fmt.Print("Continue? [y/n]: ")
+	log.Println("\n" + strings.Repeat("⚠️", 30))
+	log.Println("⚠️  IMPORTANT: This undo log is INFORMATIONAL ONLY")
+	log.Println("⚠️  Files that were deleted CANNOT be restored.")
+	log.Println("⚠️  Only the metadata (what was deleted) is logged.")
+	log.Println("⚠️" + strings.Repeat("=", 55))
+	log.Println("")
+	log.Println("💡 TIP: Next time, use -move-to <folder> to safely move duplicates")
+	log.Println("💡       instead of permanently deleting them.")
+	log.Println("")
+
+	fmt.Print("View the undo log anyway? [y/N]: ")
 	var response string
 	fmt.Scanln(&response)
 	if strings.ToLower(response) != "y" {
 		return nil
 	}
 
-	log.Println("⚠️  Undo is informational only - deleted files cannot be recovered")
-	log.Printf("💾 View undo log at: %s\n", undoFile)
-	
+	log.Println("")
+	log.Printf("💾 Undo log contents (%s):\n", undoFile)
+	log.Println(strings.Repeat("=", 70))
+
 	var undoData map[string]interface{}
 	if err := json.Unmarshal(data, &undoData); err != nil {
 		return fmt.Errorf("invalid undo log: %w", err)
 	}
-	
-	log.Printf("📊 %d files were deleted\n", undoData["entries"])
+
+	log.Printf("📊 Total files deleted: %d\n", undoData["entries"])
+	log.Println("")
+
+	// Display individual entries if available
+	if entries, ok := undoData["files"].([]interface{}); ok {
+		for i, entry := range entries {
+			if e, ok := entry.(map[string]interface{}); ok {
+				if i >= 10 { // Limit to 10 entries
+					log.Println("...")
+					break
+				}
+				path := e["path"].(string)
+				size := int64(e["size"].(float64))
+				timestamp := e["timestamp"].(string)
+				log.Printf("  %s - %s - %s", path, formatBytes(size), timestamp)
+			}
+		}
+	}
+
+	log.Println("")
+	log.Println(strings.Repeat("=", 70))
+	log.Println("⚠️  These files are GONE and cannot be recovered.")
+	log.Println("⚠️" + strings.Repeat("=", 55))
+
 	return nil
 }
 
