@@ -45,7 +45,19 @@ Other tools only catch exact duplicates. This catches:
 
 ## Installation
 
-### Build from Source
+### Option 1: Buy Pre-built Binaries ($10)
+
+Get ready-to-run binaries for all platforms — no build required:
+
+**[Buy on Gumroad](https://x6c75.gumroad.com/l/file-deduplicator)**
+
+Includes:
+- Windows, macOS (Intel + Apple Silicon), Linux (x64 + ARM64)
+- No DRM, no license keys
+- Free updates within v3.x
+- Supports ongoing development
+
+### Option 2: Build from Source (Free)
 
 ```bash
 git clone https://github.com/luinbytes/file-deduplicator.git
