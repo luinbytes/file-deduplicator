@@ -93,7 +93,8 @@ type Config struct {
 }
 
 var (
-	cfg Config
+	cfg        Config
+	configPath string // Path to config file
 )
 
 // emoji returns the emoji if NoEmoji is false, otherwise returns empty string
@@ -107,6 +108,9 @@ func emoji(e string) string {
 func init() {
 	// Override default usage to show categorized help
 	flag.Usage = customUsage
+
+	// Config file flag (must be parsed first)
+	flag.StringVar(&configPath, "config", "", "Config file path (JSON format)")
 
 	flag.StringVar(&cfg.Dir, "dir", ".", "Directory to scan for duplicates")
 	flag.BoolVar(&cfg.Recursive, "recursive", true, "Scan directories recursively")
@@ -138,7 +142,10 @@ func customUsage() {
 	fmt.Fprintf(os.Stderr, "Usage: file-deduplicator [options]\n\n")
 	fmt.Fprintf(os.Stderr, "A fast, parallel CLI duplicate finder with perceptual image hashing.\n\n")
 	
-	fmt.Fprintf(os.Stderr, "SCAN OPTIONS:\n")
+	fmt.Fprintf(os.Stderr, "CONFIG:\n")
+	fmt.Fprintf(os.Stderr, "  -config string\n\tConfig file path (JSON). Also checks ./.deduprc.json and ~/.config/file-deduplicator/config.json\n")
+	
+	fmt.Fprintf(os.Stderr, "\nSCAN OPTIONS:\n")
 	fmt.Fprintf(os.Stderr, "  -dir string\n\tDirectory to scan (default: current directory)\n")
 	fmt.Fprintf(os.Stderr, "  -recursive\n\tScan subdirectories (default: true)\n")
 	fmt.Fprintf(os.Stderr, "  -workers int\n\tNumber of parallel workers (default: %d)\n", runtime.NumCPU())
@@ -176,7 +183,106 @@ func customUsage() {
 	fmt.Fprintf(os.Stderr, "  file-deduplicator -compare photo1.jpg,photo2.jpg\n")
 }
 
+// loadConfig loads configuration from a JSON file.
+// Precedence: explicit --config > ./.deduprc.json > ~/.config/file-deduplicator/config.json
+func loadConfig() error {
+	// Determine which config file to load
+	var configFile string
+	if configPath != "" {
+		// Explicit config path provided
+		configFile = configPath
+	} else {
+		// Check default locations
+		// 1. ./.deduprc.json
+		if _, err := os.Stat(".deduprc.json"); err == nil {
+			configFile = ".deduprc.json"
+		} else {
+			// 2. ~/.config/file-deduplicator/config.json
+			home, err := os.UserHomeDir()
+			if err == nil {
+				globalConfig := filepath.Join(home, ".config", "file-deduplicator", "config.json")
+				if _, err := os.Stat(globalConfig); err == nil {
+					configFile = globalConfig
+				}
+			}
+		}
+	}
+
+	// No config file found
+	if configFile == "" {
+		return nil
+	}
+
+	// Read and parse config file
+	data, err := os.ReadFile(configFile)
+	if err != nil {
+		return fmt.Errorf("cannot read config file %s: %w", configFile, err)
+	}
+
+	var fileCfg Config
+	if err := json.Unmarshal(data, &fileCfg); err != nil {
+		return fmt.Errorf("cannot parse config file %s: %w", configFile, err)
+	}
+
+	// Merge config: only override defaults, respect explicitly set flags
+	// Since we can't detect which flags were explicitly set with standard flag pkg,
+	// we apply config values only if they differ from zero values and flags are at defaults
+	if fileCfg.Dir != "" && cfg.Dir == "." {
+		cfg.Dir = fileCfg.Dir
+	}
+	if fileCfg.Workers != 0 && cfg.Workers == runtime.NumCPU() {
+		cfg.Workers = fileCfg.Workers
+	}
+	if fileCfg.MinSize != 0 && cfg.MinSize == 1024 {
+		cfg.MinSize = fileCfg.MinSize
+	}
+	if fileCfg.HashAlgorithm != "" && cfg.HashAlgorithm == "sha256" {
+		cfg.HashAlgorithm = fileCfg.HashAlgorithm
+	}
+	if fileCfg.KeepCriteria != "" && cfg.KeepCriteria == "oldest" {
+		cfg.KeepCriteria = fileCfg.KeepCriteria
+	}
+	if fileCfg.PHashAlgorithm != "" && cfg.PHashAlgorithm == "dhash" {
+		cfg.PHashAlgorithm = fileCfg.PHashAlgorithm
+	}
+	if fileCfg.SimilarityThreshold != 0 && cfg.SimilarityThreshold == 10 {
+		cfg.SimilarityThreshold = fileCfg.SimilarityThreshold
+	}
+	if fileCfg.MoveTo != "" {
+		cfg.MoveTo = fileCfg.MoveTo
+	}
+	if fileCfg.FilePattern != "" {
+		cfg.FilePattern = fileCfg.FilePattern
+	}
+
+	// Boolean flags - use file values if not explicitly set (we assume explicit if different from default)
+	// This is a simplification; for full control, flags should override config
+	// cfg.Recursive = fileCfg.Recursive || cfg.Recursive
+	cfg.DryRun = fileCfg.DryRun || cfg.DryRun
+	cfg.Verbose = fileCfg.Verbose || cfg.Verbose
+	cfg.Interactive = fileCfg.Interactive || cfg.Interactive
+	cfg.ExportReport = fileCfg.ExportReport || cfg.ExportReport
+	cfg.NoEmoji = fileCfg.NoEmoji || cfg.NoEmoji
+	cfg.PerceptualMode = fileCfg.PerceptualMode || cfg.PerceptualMode
+	cfg.UndoLast = fileCfg.UndoLast || cfg.UndoLast
+
+	if cfg.Verbose {
+		log.Printf("📄 Loaded config from: %s", configFile)
+	}
+
+	return nil
+}
+
 func main() {
+	// Parse only -config flag first to get config file path
+	flag.Parse()
+
+	// Load config file if specified or found in default locations
+	if err := loadConfig(); err != nil {
+		log.Printf("Warning: could not load config: %v", err)
+	}
+
+	// Re-parse flags to override config values
 	flag.Parse()
 
 	// Handle undo
