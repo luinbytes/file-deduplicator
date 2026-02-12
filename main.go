@@ -105,6 +105,9 @@ func emoji(e string) string {
 }
 
 func init() {
+	// Override default usage to show categorized help
+	flag.Usage = customUsage
+
 	flag.StringVar(&cfg.Dir, "dir", ".", "Directory to scan for duplicates")
 	flag.BoolVar(&cfg.Recursive, "recursive", true, "Scan directories recursively")
 	flag.BoolVar(&cfg.DryRun, "dry-run", false, "Show what would be deleted without actually deleting")
@@ -128,6 +131,49 @@ func init() {
 	// Image comparison flags
 	flag.StringVar(&cfg.CompareImg1, "compare", "", "Compare two images (format: img1,img2 or use with -compare-with)")
 	flag.StringVar(&cfg.CompareImg2, "compare-with", "", "Second image for comparison (use with -compare)")
+}
+
+// customUsage prints categorized help text
+func customUsage() {
+	fmt.Fprintf(os.Stderr, "Usage: file-deduplicator [options]\n\n")
+	fmt.Fprintf(os.Stderr, "A fast, parallel CLI duplicate finder with perceptual image hashing.\n\n")
+	
+	fmt.Fprintf(os.Stderr, "SCAN OPTIONS:\n")
+	fmt.Fprintf(os.Stderr, "  -dir string\n\tDirectory to scan (default: current directory)\n")
+	fmt.Fprintf(os.Stderr, "  -recursive\n\tScan subdirectories (default: true)\n")
+	fmt.Fprintf(os.Stderr, "  -workers int\n\tNumber of parallel workers (default: %d)\n", runtime.NumCPU())
+	fmt.Fprintf(os.Stderr, "  -min-size int\n\tSkip files smaller than this (bytes, default: 1024)\n")
+	fmt.Fprintf(os.Stderr, "  -pattern string\n\tOnly match files matching this pattern (e.g., *.jpg)\n")
+	
+	fmt.Fprintf(os.Stderr, "\nHASH OPTIONS:\n")
+	fmt.Fprintf(os.Stderr, "  -hash string\n\tAlgorithm: sha256, sha1, md5 (default: sha256)\n")
+	
+	fmt.Fprintf(os.Stderr, "\nPERCEPTUAL IMAGE MATCHING:\n")
+	fmt.Fprintf(os.Stderr, "  -perceptual\n\tFind similar images, not just exact duplicates\n")
+	fmt.Fprintf(os.Stderr, "  -phash-algo string\n\tAlgorithm: dhash, ahash, phash (default: dhash)\n")
+	fmt.Fprintf(os.Stderr, "  -similarity int\n\tThreshold 0-64, lower = stricter (default: 10)\n")
+	fmt.Fprintf(os.Stderr, "  -compare img1,img2\n\tCompare two specific images\n")
+	fmt.Fprintf(os.Stderr, "  -compare-with string\n\tSecond image (alternative to comma syntax)\n")
+	
+	fmt.Fprintf(os.Stderr, "\nACTION OPTIONS:\n")
+	fmt.Fprintf(os.Stderr, "  -dry-run\n\tPreview what would be deleted (no changes made)\n")
+	fmt.Fprintf(os.Stderr, "  -interactive\n\tAsk before deleting each file\n")
+	fmt.Fprintf(os.Stderr, "  -move-to string\n\tMove duplicates to folder instead of deleting\n")
+	fmt.Fprintf(os.Stderr, "  -keep string\n\tWhich file to keep: oldest, newest, largest, smallest, path:<pattern> (default: oldest)\n")
+	
+	fmt.Fprintf(os.Stderr, "\nOUTPUT OPTIONS:\n")
+	fmt.Fprintf(os.Stderr, "  -verbose\n\tShow detailed progress\n")
+	fmt.Fprintf(os.Stderr, "  -export\n\tExport JSON report of duplicates found\n")
+	fmt.Fprintf(os.Stderr, "  -no-emoji\n\tPlain text output (no emoji)\n")
+	
+	fmt.Fprintf(os.Stderr, "\nUTILITY:\n")
+	fmt.Fprintf(os.Stderr, "  -undo\n\tView log of last deletion operation\n")
+	
+	fmt.Fprintf(os.Stderr, "\nEXAMPLES:\n")
+	fmt.Fprintf(os.Stderr, "  file-deduplicator -dir ~/Photos -dry-run\n")
+	fmt.Fprintf(os.Stderr, "  file-deduplicator -dir ~/Downloads -move-to ~/Duplicates\n")
+	fmt.Fprintf(os.Stderr, "  file-deduplicator -dir ~/Photos -perceptual -similarity 8\n")
+	fmt.Fprintf(os.Stderr, "  file-deduplicator -compare photo1.jpg,photo2.jpg\n")
 }
 
 func main() {
