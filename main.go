@@ -17,6 +17,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/luinbytes/file-deduplicator/tui"
 )
 
 const (
@@ -76,6 +78,7 @@ type Config struct {
 	Workers        int
 	MinSize        int64  // Minimum file size to check (bytes)
 	Interactive    bool
+	TUI            bool   // Enable TUI mode (new interactive interface)
 	MoveTo         string // Move duplicates to this folder instead of deleting
 	KeepCriteria   string // "oldest", "newest", "largest", "smallest", "first", "path"
 	HashAlgorithm  string // "sha256", "sha1", "md5"
@@ -118,7 +121,8 @@ func init() {
 	flag.BoolVar(&cfg.Verbose, "verbose", false, "Show detailed output")
 	flag.IntVar(&cfg.Workers, "workers", runtime.NumCPU(), "Number of worker goroutines")
 	flag.Int64Var(&cfg.MinSize, "min-size", 1024, "Minimum file size in bytes (default: 1KB)")
-	flag.BoolVar(&cfg.Interactive, "interactive", false, "Ask before deleting each duplicate")
+	flag.BoolVar(&cfg.Interactive, "interactive", false, "Ask before deleting each duplicate (legacy mode)")
+	flag.BoolVar(&cfg.TUI, "tui", false, "Use TUI interface for interactive deletion (recommended)")
 	flag.StringVar(&cfg.MoveTo, "move-to", "", "Move duplicates to this folder instead of deleting")
 	flag.StringVar(&cfg.KeepCriteria, "keep", "oldest", "File to keep criteria: oldest, newest, largest, smallest, first, or path:<path>")
 	flag.StringVar(&cfg.HashAlgorithm, "hash", "sha256", "Hash algorithm: sha256, sha1, or md5")
@@ -318,7 +322,10 @@ func main() {
 		}
 		log.Printf("%sKeep criteria: %s", emoji("✋"), cfg.KeepCriteria)
 		if cfg.Interactive {
-			log.Printf("%sInteractive mode enabled", emoji("❓"))
+			log.Printf("❓ Interactive mode enabled (legacy)")
+		}
+		if cfg.TUI {
+			log.Printf("🖥️  TUI mode enabled")
 		}
 		if cfg.PerceptualMode {
 			log.Printf("%sPerceptual mode enabled (%s, threshold: %d)", emoji("🖼️"), cfg.PHashAlgorithm, cfg.SimilarityThreshold)
@@ -393,8 +400,18 @@ func main() {
 
 	// Process duplicates if not dry run
 	if !cfg.DryRun && len(duplicates) > 0 {
-		if err := processDuplicates(duplicates); err != nil {
-			log.Fatalf("❌ Error processing duplicates: %v", err)
+		if cfg.TUI {
+			if err := processDuplicatesTUI(duplicates); err != nil {
+				log.Fatalf("❌ Error processing duplicates: %v", err)
+			}
+		} else if cfg.Interactive {
+			if err := processDuplicates(duplicates); err != nil {
+				log.Fatalf("❌ Error processing duplicates: %v", err)
+			}
+		} else {
+			if err := processDuplicates(duplicates); err != nil {
+				log.Fatalf("❌ Error processing duplicates: %v", err)
+			}
 		}
 	}
 
@@ -994,6 +1011,119 @@ func processDuplicates(duplicates []DuplicateGroup) error {
 			log.Printf("%sFailed to save undo log: %v", emoji("⚠️"), err)
 		} else {
 			log.Printf("%sUndo log saved (use -undo to view - files are NOT recoverable)", emoji("💾"))
+		}
+	}
+
+	return nil
+}
+
+// processDuplicatesTUI handles duplicate processing with the new TUI interface
+func processDuplicatesTUI(duplicates []DuplicateGroup) error {
+	// Convert DuplicateGroup to TUI format
+	tuiGroups := make([]tui.DuplicateGroup, len(duplicates))
+	for i, group := range duplicates {
+		files := make([]struct {
+			Path    string
+			Size    int64
+			ModTime string
+		}, len(group.Files))
+		for j, f := range group.Files {
+			files[j] = struct {
+				Path    string
+				Size    int64
+				ModTime string
+			}{
+				Path:    f.Path,
+				Size:    f.Size,
+				ModTime: f.ModTime.Format("2006-01-02"),
+			}
+		}
+		tuiGroups[i] = tui.ConvertDuplicateGroup(group.Hash, group.Size, files, group.Similarity)
+	}
+
+	// Run TUI
+	filesToDelete, err := tui.Run(tuiGroups)
+	if err != nil {
+		return fmt.Errorf("TUI error: %w", err)
+	}
+
+	// Process the selected files
+	var undoLog []UndoEntry
+	totalDeleted := 0
+	totalSpace := int64(0)
+
+	log.Printf("\n🗑️  Deleting %d selected files...", len(filesToDelete))
+
+	for _, path := range filesToDelete {
+		// Find the file info from duplicates
+		var fileInfo FileHash
+		found := false
+		for _, group := range duplicates {
+			for _, f := range group.Files {
+				if f.Path == path {
+					fileInfo = f
+					found = true
+					break
+				}
+			}
+			if found {
+				break
+			}
+		}
+
+		if !found {
+			log.Printf("⚠️  File not found in duplicates: %s", path)
+			continue
+		}
+
+		if cfg.MoveTo != "" {
+			// Move to directory
+			targetPath := filepath.Join(cfg.MoveTo, filepath.Base(path))
+			counter := 1
+			for {
+				if _, err := os.Stat(targetPath); os.IsNotExist(err) {
+					break
+				}
+				base := filepath.Base(path)
+				ext := filepath.Ext(base)
+				name := strings.TrimSuffix(base, ext)
+				targetPath = filepath.Join(cfg.MoveTo, fmt.Sprintf("%s_%d%s", name, counter, ext))
+				counter++
+			}
+			if err := os.Rename(path, targetPath); err != nil {
+				log.Printf("❌ Failed to move %s: %v", path, err)
+			} else {
+				log.Printf("✓ Moved %s -> %s", path, targetPath)
+				totalDeleted++
+				totalSpace += fileInfo.Size
+			}
+		} else {
+			// Delete file
+			if err := os.Remove(path); err != nil {
+				log.Printf("❌ Failed to delete %s: %v", path, err)
+			} else {
+				log.Printf("✓ Deleted %s", path)
+				totalDeleted++
+				totalSpace += fileInfo.Size
+				undoLog = append(undoLog, UndoEntry{
+					Path:      path,
+					Size:      fileInfo.Size,
+					ModTime:   fileInfo.ModTime,
+					Action:    "deleted",
+					Timestamp: time.Now(),
+				})
+			}
+		}
+	}
+
+	log.Printf("\n✅ %s %d files, freed %s of space", map[bool]string{true: "Moved", false: "Deleted"}[cfg.MoveTo != ""], totalDeleted, formatBytes(totalSpace))
+
+	// Save undo log
+	if len(undoLog) > 0 && cfg.MoveTo == "" {
+		if err := saveUndoLog(undoLog); err != nil {
+			log.Printf("⚠️  Failed to save undo log: %v", err)
+		} else {
+			log.Printf("💾 Undo log saved (use -undo to restore)")
 		}
 	}
 
