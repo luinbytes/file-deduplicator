@@ -168,7 +168,8 @@ func customUsage() {
 	
 	fmt.Fprintf(os.Stderr, "\nACTION OPTIONS:\n")
 	fmt.Fprintf(os.Stderr, "  -dry-run\n\tPreview what would be deleted (no changes made)\n")
-	fmt.Fprintf(os.Stderr, "  -interactive\n\tAsk before deleting each file\n")
+	fmt.Fprintf(os.Stderr, "  -tui\n\tUse TUI interface for interactive deletion (recommended)\n")
+	fmt.Fprintf(os.Stderr, "  -interactive\n\tAsk before deleting each file (legacy mode)\n")
 	fmt.Fprintf(os.Stderr, "  -move-to string\n\tMove duplicates to folder instead of deleting\n")
 	fmt.Fprintf(os.Stderr, "  -keep string\n\tWhich file to keep: oldest, newest, largest, smallest, path:<pattern> (default: oldest)\n")
 	
