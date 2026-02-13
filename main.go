@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/luinbytes/file-deduplicator/tui"
 )
 
@@ -551,8 +552,19 @@ func computeHashes(files []string) ([]FileHash, error) {
 	// Final progress update
 	if !cfg.Verbose && totalFiles > 0 {
 		elapsed := time.Since(startTime).Seconds()
-		fmt.Fprintf(os.Stderr, "\r%s%s %d/%d (%.1f%%) Completed in %s\n",
-			emoji("✅"), emoji("▏"), totalFiles, totalFiles, 100.0, formatDuration(elapsed))
+		// Create styled progress bar (100% full)
+		barWidth := 30
+		filledStyle := lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#7D56F4")).
+			Background(lipgloss.Color("#7D56F4"))
+		
+		bar := ""
+		for i := 0; i < barWidth; i++ {
+			bar += filledStyle.Render("█")
+		}
+		
+		fmt.Fprintf(os.Stderr, "\r%s%s%s %d/%d (%.1f%%) Completed in %s\n",
+			emoji("✅"), bar, emoji("▏"), totalFiles, totalFiles, 100.0, formatDuration(elapsed))
 	}
 
 	return fileHashes, nil
@@ -617,22 +629,22 @@ func worker(wg *sync.WaitGroup, fileChan <-chan string, resultChan chan<- FileHa
 
 // printProgress displays a progress bar with ETA
 func printProgress(current, total int, startTime time.Time) {
-	percentage := float64(current) * 100 / float64(total)
-	barWidth := 20
-	filled := int(percentage / 100 * float64(barWidth))
+	percentage := float64(current) / float64(total)
+	barWidth := 30
+	filled := int(percentage * float64(barWidth))
 	empty := barWidth - filled
 
-	// Choose bar characters based on emoji setting
-	var filledChar, emptyChar, modeIcon string
-	if cfg.NoEmoji {
-		filledChar = "="
-		emptyChar = " "
-	} else {
-		filledChar = "█"
-		emptyChar = "░"
-	}
+	// Create gradient-style colors for the progress bar
+	// Gradient from green (#04B575) to blue (#7D56F4)
+	filledStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#7D56F4")).
+		Background(lipgloss.Color("#7D56F4"))
+	emptyStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#3c3c3c")).
+		Background(lipgloss.Color("#3c3c3c"))
 
 	// Add perceptual mode indicator
+	var modeIcon string
 	if cfg.PerceptualMode {
 		if cfg.NoEmoji {
 			modeIcon = "[IMG]"
@@ -641,14 +653,14 @@ func printProgress(current, total int, startTime time.Time) {
 		}
 	}
 
-	bar := "["
+	// Build the progress bar with lipgloss styling
+	bar := ""
 	for i := 0; i < filled; i++ {
-		bar += filledChar
+		bar += filledStyle.Render("█")
 	}
 	for i := 0; i < empty; i++ {
-		bar += emptyChar
+		bar += emptyStyle.Render("░")
 	}
-	bar += "]"
 
 	// Calculate ETA
 	elapsed := time.Since(startTime).Seconds()
@@ -661,7 +673,8 @@ func printProgress(current, total int, startTime time.Time) {
 	}
 
 	// Print progress with ETA and mode indicator
-	fmt.Fprintf(os.Stderr, "\r%s%s%s%s %d/%d (%.1f%%) ETA: %s", emoji("🔐"), modeIcon, bar, emoji("▏"), current, total, percentage, eta)
+	percentageDisplay := percentage * 100
+	fmt.Fprintf(os.Stderr, "\r%s%s%s %d/%d (%.1f%%) ETA: %s", emoji("🔐"), modeIcon, bar, current, total, percentageDisplay, eta)
 }
 
 // formatDuration converts seconds to a human-readable duration
