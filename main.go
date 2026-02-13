@@ -77,6 +77,7 @@ type Config struct {
 	Verbose        bool
 	Workers        int
 	MinSize        int64  // Minimum file size to check (bytes)
+	MaxSize        int64  // Maximum file size to check (bytes, 0 = unlimited)
 	Interactive    bool
 	TUI            bool   // Enable TUI mode (new interactive interface)
 	MoveTo         string // Move duplicates to this folder instead of deleting
@@ -121,6 +122,7 @@ func init() {
 	flag.BoolVar(&cfg.Verbose, "verbose", false, "Show detailed output")
 	flag.IntVar(&cfg.Workers, "workers", runtime.NumCPU(), "Number of worker goroutines")
 	flag.Int64Var(&cfg.MinSize, "min-size", 1024, "Minimum file size in bytes (default: 1KB)")
+	flag.Int64Var(&cfg.MaxSize, "max-size", 0, "Maximum file size in bytes (0 = unlimited)")
 	flag.BoolVar(&cfg.Interactive, "interactive", false, "Ask before deleting each duplicate (legacy mode)")
 	flag.BoolVar(&cfg.TUI, "tui", false, "Use TUI interface for interactive deletion (recommended)")
 	flag.StringVar(&cfg.MoveTo, "move-to", "", "Move duplicates to this folder instead of deleting")
@@ -154,6 +156,7 @@ func customUsage() {
 	fmt.Fprintf(os.Stderr, "  -recursive\n\tScan subdirectories (default: true)\n")
 	fmt.Fprintf(os.Stderr, "  -workers int\n\tNumber of parallel workers (default: %d)\n", runtime.NumCPU())
 	fmt.Fprintf(os.Stderr, "  -min-size int\n\tSkip files smaller than this (bytes, default: 1024)\n")
+	fmt.Fprintf(os.Stderr, "  -max-size int\n\tSkip files larger than this (bytes, 0 = unlimited)\n")
 	fmt.Fprintf(os.Stderr, "  -pattern string\n\tOnly match files matching this pattern (e.g., *.jpg)\n")
 	
 	fmt.Fprintf(os.Stderr, "\nHASH OPTIONS:\n")
@@ -241,6 +244,9 @@ func loadConfig() error {
 	if fileCfg.MinSize != 0 && cfg.MinSize == 1024 {
 		cfg.MinSize = fileCfg.MinSize
 	}
+	if fileCfg.MaxSize != 0 && cfg.MaxSize == 0 {
+		cfg.MaxSize = fileCfg.MaxSize
+	}
 	if fileCfg.HashAlgorithm != "" && cfg.HashAlgorithm == "sha256" {
 		cfg.HashAlgorithm = fileCfg.HashAlgorithm
 	}
@@ -314,6 +320,9 @@ func main() {
 		log.Printf("%sRecursive: %v", emoji("🔄"), cfg.Recursive)
 		log.Printf("%sWorkers: %d", emoji("👷"), cfg.Workers)
 		log.Printf("%sMin size: %d bytes", emoji("📏"), cfg.MinSize)
+		if cfg.MaxSize > 0 {
+			log.Printf("%sMax size: %d bytes", emoji("📏"), cfg.MaxSize)
+		}
 		log.Printf("%sHash algorithm: %s", emoji("🔐"), cfg.HashAlgorithm)
 		if cfg.FilePattern != "" {
 			log.Printf("%sFile pattern: %s", emoji("🎯"), cfg.FilePattern)
@@ -353,7 +362,8 @@ func main() {
 			}
 			continue
 		}
-		if info.Size() >= cfg.MinSize {
+		size := info.Size()
+		if size >= cfg.MinSize && (cfg.MaxSize == 0 || size <= cfg.MaxSize) {
 			// Filter by file pattern if specified
 			if cfg.FilePattern != "" {
 				matched, err := filepath.Match(cfg.FilePattern, filepath.Base(file))
@@ -369,6 +379,14 @@ func main() {
 				}
 			}
 			filteredFiles = append(filteredFiles, file)
+		} else {
+			if cfg.Verbose {
+				if size < cfg.MinSize {
+					log.Printf("%sSkipping small file: %s (%d bytes < %d)", emoji("🚫"), file, size, cfg.MinSize)
+				} else if cfg.MaxSize > 0 && size > cfg.MaxSize {
+					log.Printf("%sSkipping large file: %s (%d bytes > %d)", emoji("🚫"), file, size, cfg.MaxSize)
+				}
+			}
 		}
 	}
 	log.Printf("%sAfter filters: %d files", emoji("📏"), len(filteredFiles))
