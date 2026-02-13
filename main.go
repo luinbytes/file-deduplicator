@@ -297,6 +297,13 @@ func main() {
 	// Re-parse flags to override config values
 	flag.Parse()
 
+	// Set default directory to binary location if not explicitly specified
+	if cfg.Dir == "." {
+		if binaryDir := getBinaryDir(); binaryDir != "" {
+			cfg.Dir = binaryDir
+		}
+	}
+
 	// Handle undo
 	if cfg.UndoLast {
 		if err := undoLast(); err != nil {
@@ -1440,6 +1447,37 @@ func compareImagesCLI() error {
 	fmt.Println()
 
 	return nil
+}
+
+// getBinaryDir returns the directory where the executable is located.
+// Falls back to current directory on errors or when running via `go run`.
+func getBinaryDir() string {
+	execPath, err := os.Executable()
+	if err != nil {
+		if cfg.Verbose {
+			log.Printf("%sCould not get executable path: %v", emoji("⚠️"), err)
+		}
+		return "" // fallback to default
+	}
+
+	// Handle symlinks
+	realPath, err := filepath.EvalSymlinks(execPath)
+	if err != nil {
+		realPath = execPath // use the original path if symlink resolution fails
+	}
+
+	// Check if running via `go run` (path will be in a go-build temp directory)
+	// Pattern: /tmp/go-build... or similar temp build directories
+	base := filepath.Base(realPath)
+	if strings.Contains(realPath, "go-build") ||
+		strings.HasPrefix(base, "go-build") {
+		if cfg.Verbose {
+			log.Printf("%sDetected go run mode, using current directory", emoji("ℹ️"))
+		}
+		return "" // fallback to current directory
+	}
+
+	return filepath.Dir(realPath)
 }
 
 var algoDescriptions = map[string]string{
