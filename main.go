@@ -95,6 +95,23 @@ func init() {
 }
 
 func main() {
+	// Detect if double-clicked vs run from CLI
+	if isDoubleClick() && os.Getenv("_DEDUP_SPAWNED") != "1" {
+		// Double-clicked: spawn terminal with TUI and exit
+		if err := spawnTerminal(); err != nil {
+			fmt.Fprintf(os.Stderr, "⚠️  Failed to spawn terminal: %v\n", err)
+			fmt.Fprintf(os.Stderr, "💡 Try running from command line with --tui flag\n")
+		}
+		return
+	}
+
+	// If from CLI with no arguments, show help
+	if len(os.Args) == 1 {
+		fmt.Fprintf(os.Stderr, "File Deduplicator v%s\n\nUsage: %s [options]\n\nOptions:\n", version, os.Args[0])
+		flag.PrintDefaults()
+		return
+	}
+
 	flag.Parse()
 
 	// Handle undo
