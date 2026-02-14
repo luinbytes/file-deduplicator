@@ -93,6 +93,10 @@ type Config struct {
 	// Image comparison flags
 	CompareImg1 string // First image for comparison
 	CompareImg2 string // Second image for comparison
+	// Cloud storage options
+	CloudProvider string // "local", "google-drive", "dropbox", "onedrive"
+	CloudPath     string // Path within cloud storage
+	CloudAuth     string // Path to credentials file
 }
 
 var (
@@ -139,6 +143,11 @@ func init() {
 	// Image comparison flags
 	flag.StringVar(&cfg.CompareImg1, "compare", "", "Compare two images (format: img1,img2 or use with -compare-with)")
 	flag.StringVar(&cfg.CompareImg2, "compare-with", "", "Second image for comparison (use with -compare)")
+	
+	// Cloud storage flags
+	flag.StringVar(&cfg.CloudProvider, "cloud", "", "Cloud storage provider: google-drive, dropbox, onedrive (default: local)")
+	flag.StringVar(&cfg.CloudPath, "cloud-path", "", "Path in cloud storage to scan (default: root)")
+	flag.StringVar(&cfg.CloudAuth, "cloud-auth", "", "Path to cloud provider credentials file")
 }
 
 // customUsage prints categorized help text
@@ -155,6 +164,11 @@ func customUsage() {
 	fmt.Fprintf(os.Stderr, "  -workers int\n\tNumber of parallel workers (default: %d)\n", runtime.NumCPU())
 	fmt.Fprintf(os.Stderr, "  -min-size int\n\tSkip files smaller than this (bytes, default: 1024)\n")
 	fmt.Fprintf(os.Stderr, "  -pattern string\n\tOnly match files matching this pattern (e.g., *.jpg)\n")
+	
+	fmt.Fprintf(os.Stderr, "\nCLOUD STORAGE (BETA):\n")
+	fmt.Fprintf(os.Stderr, "  -cloud string\n\tCloud provider: google-drive, dropbox, onedrive\n")
+	fmt.Fprintf(os.Stderr, "  -cloud-path string\n\tPath in cloud storage to scan (default: root)\n")
+	fmt.Fprintf(os.Stderr, "  -cloud-auth string\n\tPath to credentials file for cloud provider\n")
 	
 	fmt.Fprintf(os.Stderr, "\nHASH OPTIONS:\n")
 	fmt.Fprintf(os.Stderr, "  -hash string\n\tAlgorithm: sha256, sha1, md5 (default: sha256)\n")
@@ -186,6 +200,7 @@ func customUsage() {
 	fmt.Fprintf(os.Stderr, "  file-deduplicator -dir ~/Downloads -move-to ~/Duplicates\n")
 	fmt.Fprintf(os.Stderr, "  file-deduplicator -dir ~/Photos -perceptual -similarity 8\n")
 	fmt.Fprintf(os.Stderr, "  file-deduplicator -compare photo1.jpg,photo2.jpg\n")
+	fmt.Fprintf(os.Stderr, "  file-deduplicator -cloud google-drive -cloud-auth credentials.json\n")
 }
 
 // loadConfig loads configuration from a JSON file.
