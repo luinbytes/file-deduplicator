@@ -89,6 +89,7 @@ type Config struct {
 	HashAlgorithm  string // "sha256", "sha1", "md5"
 	FilePattern    string // Only include files matching this pattern
 	ExportReport   bool
+	ExportCSV      bool   // Export as CSV format
 	UndoLast       bool
 	NoEmoji        bool   // Disable emoji output for cleaner logs
 	// Perceptual hashing options
@@ -138,6 +139,7 @@ func init() {
 	flag.StringVar(&cfg.HashAlgorithm, "hash", "sha256", "Hash algorithm: sha256, sha1, or md5")
 	flag.StringVar(&cfg.FilePattern, "pattern", "", "File pattern to match (e.g., *.jpg, *.pdf)")
 	flag.BoolVar(&cfg.ExportReport, "export", false, "Export duplicate report to JSON file")
+	flag.BoolVar(&cfg.ExportCSV, "export-csv", false, "Export duplicate report to CSV file")
 	flag.BoolVar(&cfg.UndoLast, "undo", false, "Undo last operation")
 	flag.BoolVar(&cfg.NoEmoji, "no-emoji", false, "Disable emoji output for cleaner logs")
 
@@ -192,6 +194,7 @@ func customUsage() {
 	fmt.Fprintf(os.Stderr, "\nOUTPUT OPTIONS:\n")
 	fmt.Fprintf(os.Stderr, "  -verbose\n\tShow detailed progress\n")
 	fmt.Fprintf(os.Stderr, "  -export\n\tExport JSON report of duplicates found\n")
+	fmt.Fprintf(os.Stderr, "  -export-csv\n\tExport CSV report of duplicates found\n")
 	fmt.Fprintf(os.Stderr, "  -no-emoji\n\tPlain text output (no emoji)\n")
 
 	fmt.Fprintf(os.Stderr, "\nUTILITY:\n")
@@ -448,6 +451,15 @@ func main() {
 			log.Printf("%sFailed to export report: %v", emoji("⚠️"), err)
 		} else {
 			log.Printf("%sReport exported to %s", emoji("📄"), reportFile)
+		}
+	}
+
+	// Export CSV if requested
+	if cfg.ExportCSV {
+		if err := exportCSV(duplicates); err != nil {
+			log.Printf("%sFailed to export CSV: %v", emoji("⚠️"), err)
+		} else {
+			log.Printf("%sCSV exported to %s", emoji("📄"), ".deduplicator_report.csv")
 		}
 	}
 
@@ -1304,6 +1316,52 @@ func exportReport(duplicates []DuplicateGroup) error {
 	}
 
 	return os.WriteFile(reportFile, data, 0644)
+}
+
+// exportCSV exports duplicates to CSV format for easy integration with other tools
+func exportCSV(duplicates []DuplicateGroup) error {
+	const csvFile = ".deduplicator_report.csv"
+
+	var buf strings.Builder
+
+	// CSV Header
+	buf.WriteString("group_hash,group_size,group_similarity,filepath,file_size,file_modified,is_duplicate,action\n")
+
+	for _, group := range duplicates {
+		keepIdx := selectFileToKeep(group)
+		for i, fh := range group.Files {
+			isDuplicate := i != keepIdx
+			action := "keep"
+			if isDuplicate {
+				if cfg.MoveTo != "" {
+					action = "move"
+				} else {
+					action = "delete"
+				}
+			}
+
+			// Escape fields that might contain commas
+			path := fmt.Sprintf("%q", fh.Path)
+			groupHash := group.Hash
+			if len(groupHash) > 16 {
+				groupHash = groupHash[:16] + "..."
+			}
+
+			line := fmt.Sprintf("%s,%d,%.0f,%s,%d,%s,%t,%s\n",
+				groupHash,
+				group.Size,
+				group.Similarity,
+				path,
+				fh.Size,
+				fh.ModTime.Format("2006-01-02 15:04:05"),
+				isDuplicate,
+				action,
+			)
+			buf.WriteString(line)
+		}
+	}
+
+	return os.WriteFile(csvFile, []byte(buf.String()), 0644)
 }
 
 func formatBytes(bytes int64) string {
