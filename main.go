@@ -12,13 +12,16 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/fsnotify/fsnotify"
 	"github.com/luinbytes/file-deduplicator/tui"
 )
 
@@ -95,6 +98,10 @@ type Config struct {
 	// Image comparison flags
 	CompareImg1 string // First image for comparison
 	CompareImg2 string // Second image for comparison
+	// Watch mode options
+	WatchMode      bool          // Enable real-time watch mode
+	WatchDebounce  time.Duration // Debounce interval for file events
+	WatchAutoClean bool          // Automatically move/delete duplicates as they appear
 }
 
 var (
@@ -133,25 +140,30 @@ func init() {
 	flag.BoolVar(&cfg.ExportReport, "export", false, "Export duplicate report to JSON file")
 	flag.BoolVar(&cfg.UndoLast, "undo", false, "Undo last operation")
 	flag.BoolVar(&cfg.NoEmoji, "no-emoji", false, "Disable emoji output for cleaner logs")
-	
+
 	// Perceptual hashing flags
 	flag.BoolVar(&cfg.PerceptualMode, "perceptual", false, "Enable perceptual hashing for images (finds similar images, not just exact duplicates)")
 	flag.StringVar(&cfg.PHashAlgorithm, "phash-algo", "dhash", "Perceptual hash algorithm: dhash (fast), ahash, phash (robust)")
 	flag.IntVar(&cfg.SimilarityThreshold, "similarity", 10, "Similarity threshold (0-64). Lower = stricter. Default 10.")
-	
+
 	// Image comparison flags
 	flag.StringVar(&cfg.CompareImg1, "compare", "", "Compare two images (format: img1,img2 or use with -compare-with)")
 	flag.StringVar(&cfg.CompareImg2, "compare-with", "", "Second image for comparison (use with -compare)")
+
+	// Watch mode flags
+	flag.BoolVar(&cfg.WatchMode, "watch", false, "Enable real-time watch mode (monitor for new duplicates)")
+	flag.DurationVar(&cfg.WatchDebounce, "watch-debounce", 2*time.Second, "Debounce interval for file events in watch mode")
+	flag.BoolVar(&cfg.WatchAutoClean, "watch-auto-clean", false, "Automatically clean duplicates in watch mode (use with caution)")
 }
 
 // customUsage prints categorized help text
 func customUsage() {
 	fmt.Fprintf(os.Stderr, "Usage: file-deduplicator [options]\n\n")
 	fmt.Fprintf(os.Stderr, "A fast, parallel CLI duplicate finder with perceptual image hashing.\n\n")
-	
+
 	fmt.Fprintf(os.Stderr, "CONFIG:\n")
 	fmt.Fprintf(os.Stderr, "  -config string\n\tConfig file path (JSON). Also checks ./.deduprc.json and ~/.config/file-deduplicator/config.json\n")
-	
+
 	fmt.Fprintf(os.Stderr, "\nSCAN OPTIONS:\n")
 	fmt.Fprintf(os.Stderr, "  -dir string\n\tDirectory to scan (default: current directory)\n")
 	fmt.Fprintf(os.Stderr, "  -recursive\n\tScan subdirectories (default: true)\n")
@@ -159,37 +171,43 @@ func customUsage() {
 	fmt.Fprintf(os.Stderr, "  -min-size int\n\tSkip files smaller than this (bytes, default: 1024)\n")
 	fmt.Fprintf(os.Stderr, "  -max-size int\n\tSkip files larger than this (bytes, 0 = unlimited)\n")
 	fmt.Fprintf(os.Stderr, "  -pattern string\n\tOnly match files matching this pattern (e.g., *.jpg)\n")
-	
+
 	fmt.Fprintf(os.Stderr, "\nHASH OPTIONS:\n")
 	fmt.Fprintf(os.Stderr, "  -hash string\n\tAlgorithm: sha256, sha1, md5 (default: sha256)\n")
-	
+
 	fmt.Fprintf(os.Stderr, "\nPERCEPTUAL IMAGE MATCHING:\n")
 	fmt.Fprintf(os.Stderr, "  -perceptual\n\tFind similar images, not just exact duplicates\n")
 	fmt.Fprintf(os.Stderr, "  -phash-algo string\n\tAlgorithm: dhash, ahash, phash (default: dhash)\n")
 	fmt.Fprintf(os.Stderr, "  -similarity int\n\tThreshold 0-64, lower = stricter (default: 10)\n")
 	fmt.Fprintf(os.Stderr, "  -compare img1,img2\n\tCompare two specific images\n")
 	fmt.Fprintf(os.Stderr, "  -compare-with string\n\tSecond image (alternative to comma syntax)\n")
-	
+
 	fmt.Fprintf(os.Stderr, "\nACTION OPTIONS:\n")
 	fmt.Fprintf(os.Stderr, "  -dry-run\n\tPreview what would be deleted (no changes made)\n")
 	fmt.Fprintf(os.Stderr, "  -tui\n\tUse TUI interface for interactive deletion (recommended)\n")
 	fmt.Fprintf(os.Stderr, "  -interactive\n\tAsk before deleting each file (legacy mode)\n")
 	fmt.Fprintf(os.Stderr, "  -move-to string\n\tMove duplicates to folder instead of deleting\n")
 	fmt.Fprintf(os.Stderr, "  -keep string\n\tWhich file to keep: oldest, newest, largest, smallest, path:<pattern> (default: oldest)\n")
-	
+
 	fmt.Fprintf(os.Stderr, "\nOUTPUT OPTIONS:\n")
 	fmt.Fprintf(os.Stderr, "  -verbose\n\tShow detailed progress\n")
 	fmt.Fprintf(os.Stderr, "  -export\n\tExport JSON report of duplicates found\n")
 	fmt.Fprintf(os.Stderr, "  -no-emoji\n\tPlain text output (no emoji)\n")
-	
+
 	fmt.Fprintf(os.Stderr, "\nUTILITY:\n")
 	fmt.Fprintf(os.Stderr, "  -undo\n\tView log of last deletion operation\n")
-	
+
+	fmt.Fprintf(os.Stderr, "\nWATCH MODE:\n")
+	fmt.Fprintf(os.Stderr, "  -watch\n\tMonitor directory for new files and detect duplicates in real-time\n")
+	fmt.Fprintf(os.Stderr, "  -watch-debounce duration\n\tDebounce interval for file events (default: 2s)\n")
+	fmt.Fprintf(os.Stderr, "  -watch-auto-clean\n\tAutomatically clean duplicates in watch mode (dangerous!)\n")
+
 	fmt.Fprintf(os.Stderr, "\nEXAMPLES:\n")
 	fmt.Fprintf(os.Stderr, "  file-deduplicator -dir ~/Photos -dry-run\n")
 	fmt.Fprintf(os.Stderr, "  file-deduplicator -dir ~/Downloads -move-to ~/Duplicates\n")
 	fmt.Fprintf(os.Stderr, "  file-deduplicator -dir ~/Photos -perceptual -similarity 8\n")
 	fmt.Fprintf(os.Stderr, "  file-deduplicator -compare photo1.jpg,photo2.jpg\n")
+	fmt.Fprintf(os.Stderr, "  file-deduplicator -dir ~/Downloads -watch\n")
 }
 
 // loadConfig loads configuration from a JSON file.
@@ -316,6 +334,14 @@ func main() {
 	if cfg.CompareImg1 != "" {
 		if err := compareImagesCLI(); err != nil {
 			log.Fatalf("❌ Error comparing images: %v", err)
+		}
+		return
+	}
+
+	// Handle watch mode
+	if cfg.WatchMode {
+		if err := runWatchMode(); err != nil {
+			log.Fatalf("❌ Error in watch mode: %v", err)
 		}
 		return
 	}
@@ -564,12 +590,12 @@ func computeHashes(files []string) ([]FileHash, error) {
 		filledStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#7D56F4")).
 			Background(lipgloss.Color("#7D56F4"))
-		
+
 		bar := ""
 		for i := 0; i < barWidth; i++ {
 			bar += filledStyle.Render("█")
 		}
-		
+
 		fmt.Fprintf(os.Stderr, "\r%s%s%s %d/%d (%.1f%%) Completed in %s\n",
 			emoji("✅"), bar, emoji("▏"), totalFiles, totalFiles, 100.0, formatDuration(elapsed))
 	}
@@ -735,7 +761,7 @@ func findDuplicates(fileHashes []FileHash) []DuplicateGroup {
 	if cfg.PerceptualMode {
 		return findPerceptualDuplicates(fileHashes)
 	}
-	
+
 	// Standard exact-match deduplication
 	hashMap := make(map[string][]FileHash)
 
@@ -762,7 +788,7 @@ func findDuplicates(fileHashes []FileHash) []DuplicateGroup {
 func findPerceptualDuplicates(fileHashes []FileHash) []DuplicateGroup {
 	var imageFiles []FileHash
 	var regularFiles []FileHash
-	
+
 	// Separate images from regular files
 	for _, fh := range fileHashes {
 		if fh.PHash != "" {
@@ -771,7 +797,7 @@ func findPerceptualDuplicates(fileHashes []FileHash) []DuplicateGroup {
 			regularFiles = append(regularFiles, fh)
 		}
 	}
-	
+
 	// Group regular files by exact hash (standard dedup)
 	var duplicates []DuplicateGroup
 	hashMap := make(map[string][]FileHash)
@@ -788,36 +814,36 @@ func findPerceptualDuplicates(fileHashes []FileHash) []DuplicateGroup {
 			})
 		}
 	}
-	
+
 	// Group images by perceptual similarity
 	visited := make(map[int]bool)
 	for i := 0; i < len(imageFiles); i++ {
 		if visited[i] {
 			continue
 		}
-		
+
 		group := []FileHash{imageFiles[i]}
 		visited[i] = true
-		
+
 		for j := i + 1; j < len(imageFiles); j++ {
 			if visited[j] {
 				continue
 			}
-			
+
 			dist := hammingDistance(imageFiles[i].PHash, imageFiles[j].PHash)
 			if dist >= 0 && dist <= cfg.SimilarityThreshold {
 				group = append(group, imageFiles[j])
 				visited[j] = true
 			}
 		}
-		
+
 		if len(group) > 1 {
 			// Calculate average similarity
 			avgSimilarity := 100.0 - (float64(cfg.SimilarityThreshold) / 64.0 * 100.0)
 			if avgSimilarity < 50 {
 				avgSimilarity = 50 + float64(cfg.SimilarityThreshold)
 			}
-			
+
 			duplicates = append(duplicates, DuplicateGroup{
 				Hash:  imageFiles[i].PHash, // Use perceptual hash as group ID
 				Size:  imageFiles[i].Size,
@@ -826,7 +852,7 @@ func findPerceptualDuplicates(fileHashes []FileHash) []DuplicateGroup {
 			})
 		}
 	}
-	
+
 	return duplicates
 }
 
@@ -838,7 +864,7 @@ func reportDuplicates(duplicates []DuplicateGroup) {
 
 	totalDuplicates := 0
 	totalSpace := int64(0)
-	
+
 	// Count perceptual vs exact matches
 	perceptualGroups := 0
 	for _, group := range duplicates {
@@ -1354,11 +1380,453 @@ func printStatistics(stats *Statistics) {
 	}
 }
 
+// WatchModeState tracks the state of the watch mode
+type WatchModeState struct {
+	mu          sync.RWMutex
+	hashMap     map[string][]FileHash // hash -> files
+	pHashMap    map[string][]FileHash // perceptual hash -> files (for images)
+	watchedDir  string
+	stats       WatchStats
+}
+
+// WatchStats tracks statistics for watch mode
+type WatchStats struct {
+	FilesWatched    int
+	DuplicatesFound int
+	SpaceRecoverable int64
+	LastScan        time.Time
+}
+
+// runWatchMode starts the real-time duplicate detection mode
+func runWatchMode() error {
+	// Validate directory
+	absDir, err := filepath.Abs(cfg.Dir)
+	if err != nil {
+		return fmt.Errorf("cannot resolve directory: %w", err)
+	}
+
+	if info, err := os.Stat(absDir); err != nil || !info.IsDir() {
+		return fmt.Errorf("%s is not a valid directory", absDir)
+	}
+
+	// Initialize state
+	state := &WatchModeState{
+		hashMap:    make(map[string][]FileHash),
+		pHashMap:   make(map[string][]FileHash),
+		watchedDir: absDir,
+	}
+
+	log.Printf("%s═══════════════════════════════════════════════════════════", emoji("🔍"))
+	log.Printf("%s  File Deduplicator v%s - WATCH MODE", emoji("👁️"), version)
+	log.Printf("%s═══════════════════════════════════════════════════════════", emoji("🔍"))
+	log.Printf("")
+	log.Printf("%sWatching: %s", emoji("📁"), absDir)
+	log.Printf("%sRecursive: %v", emoji("🔄"), cfg.Recursive)
+	log.Printf("%sMin size: %s", emoji("📏"), formatBytes(cfg.MinSize))
+	if cfg.MaxSize > 0 {
+		log.Printf("%sMax size: %s", emoji("📏"), formatBytes(cfg.MaxSize))
+	}
+	log.Printf("%sDebounce: %v", emoji("⏱️"), cfg.WatchDebounce)
+	if cfg.PerceptualMode {
+		log.Printf("%sPerceptual: %s (threshold: %d)", emoji("🖼️"), cfg.PHashAlgorithm, cfg.SimilarityThreshold)
+	}
+	if cfg.WatchAutoClean {
+		log.Printf("%sAUTO-CLEAN ENABLED - Duplicates will be %s automatically!", emoji("⚠️"), map[bool]string{true: "moved", false: "deleted"}[cfg.MoveTo != ""])
+		if cfg.MoveTo != "" {
+			log.Printf("%sMove target: %s", emoji("📦"), cfg.MoveTo)
+		}
+	}
+	log.Printf("")
+	log.Printf("%sPress Ctrl+C to stop watching...", emoji("💡"))
+	log.Printf("")
+
+	// Create fsnotify watcher
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return fmt.Errorf("failed to create watcher: %w", err)
+	}
+	defer watcher.Close()
+
+	// Add directory to watcher
+	if err := addWatchDir(watcher, absDir); err != nil {
+		return fmt.Errorf("failed to watch directory: %w", err)
+	}
+
+	// Initial scan - hash all existing files
+	log.Printf("%sPerforming initial scan...", emoji("🔄"))
+	if err := initialScan(state, absDir); err != nil {
+		return fmt.Errorf("initial scan failed: %w", err)
+	}
+	log.Printf("%sInitial scan complete. Tracking %d file hashes.", emoji("✅"), state.countHashes())
+	log.Printf("")
+
+	// Handle graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	// Debounce timer for batch processing
+	var pendingFiles []string
+	var debounceTimer *time.Timer
+	debounceChan := make(chan struct{})
+
+	// Process events
+	for {
+		select {
+		case <-sigChan:
+			log.Printf("")
+			log.Printf("%sWatch mode stopped.", emoji("👋"))
+			state.printSummary()
+			return nil
+
+		case event, ok := <-watcher.Events:
+			if !ok {
+				return nil
+			}
+
+			// Handle new directories (if recursive)
+			if event.Op&fsnotify.Create == fsnotify.Create {
+				if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
+					if cfg.Recursive {
+						if err := addWatchDir(watcher, event.Name); err == nil && cfg.Verbose {
+							log.Printf("%sNow watching: %s", emoji("📁"), event.Name)
+						}
+					}
+					continue
+				}
+			}
+
+			// Handle new/modified files
+			if event.Op&fsnotify.Create == fsnotify.Create || event.Op&fsnotify.Write == fsnotify.Write {
+				// Skip hidden files and directories
+				if strings.HasPrefix(filepath.Base(event.Name), ".") {
+					continue
+				}
+
+				// Check file size
+				info, err := os.Stat(event.Name)
+				if err != nil || info.IsDir() || info.Size() < cfg.MinSize {
+					continue
+				}
+				if cfg.MaxSize > 0 && info.Size() > cfg.MaxSize {
+					continue
+				}
+
+				// Check file pattern
+				if cfg.FilePattern != "" {
+					matched, _ := filepath.Match(cfg.FilePattern, filepath.Base(event.Name))
+					if !matched {
+						continue
+					}
+				}
+
+				// Add to pending files for debouncing
+				pendingFiles = append(pendingFiles, event.Name)
+
+				// Reset debounce timer
+				if debounceTimer != nil {
+					debounceTimer.Stop()
+				}
+				debounceTimer = time.AfterFunc(cfg.WatchDebounce, func() {
+					debounceChan <- struct{}{}
+				})
+			}
+
+		case <-debounceChan:
+			// Process pending files
+			if len(pendingFiles) > 0 {
+				processNewFiles(state, pendingFiles)
+				pendingFiles = nil
+			}
+
+		case err, ok := <-watcher.Errors:
+			if !ok {
+				return nil
+			}
+			log.Printf("%sWatcher error: %v", emoji("⚠️"), err)
+		}
+	}
+}
+
+// addWatchDir adds a directory and its subdirectories to the watcher
+func addWatchDir(watcher *fsnotify.Watcher, dir string) error {
+	if err := watcher.Add(dir); err != nil {
+		return err
+	}
+
+	if cfg.Recursive {
+		return filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return nil // Skip errors
+			}
+			if info.IsDir() && path != dir && !strings.HasPrefix(filepath.Base(path), ".") {
+				if err := watcher.Add(path); err != nil {
+					return nil // Skip directories we can't watch
+				}
+			}
+			return nil
+		})
+	}
+	return nil
+}
+
+// initialScan performs an initial scan of the directory
+func initialScan(state *WatchModeState, dir string) error {
+	var files []string
+
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil // Skip errors
+		}
+		if info.IsDir() {
+			if !cfg.Recursive && path != dir {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if strings.HasPrefix(filepath.Base(path), ".") {
+			return nil
+		}
+		if info.Size() < cfg.MinSize {
+			return nil
+		}
+		if cfg.MaxSize > 0 && info.Size() > cfg.MaxSize {
+			return nil
+		}
+		if cfg.FilePattern != "" {
+			matched, _ := filepath.Match(cfg.FilePattern, filepath.Base(path))
+			if !matched {
+				return nil
+			}
+		}
+		files = append(files, path)
+		return nil
+	})
+
+	if err != nil {
+		return err
+	}
+
+	// Hash all files
+	for _, file := range files {
+		hasher := getHasher()
+		hash, size, modTime, err := hashFile(file, hasher)
+		if err != nil {
+			continue
+		}
+
+		fh := FileHash{
+			Path:    file,
+			Size:    size,
+			Hash:    hash,
+			ModTime: modTime,
+		}
+
+		// Compute perceptual hash for images if enabled
+		if cfg.PerceptualMode && isImageFile(file) {
+			pHash, err := computePerceptualHash(file, cfg.PHashAlgorithm)
+			if err == nil {
+				fh.PHash = pHash
+				state.mu.Lock()
+				state.pHashMap[pHash] = append(state.pHashMap[pHash], fh)
+				state.mu.Unlock()
+			}
+		}
+
+		state.mu.Lock()
+		state.hashMap[hash] = append(state.hashMap[hash], fh)
+		state.stats.FilesWatched++
+		state.mu.Unlock()
+	}
+
+	return nil
+}
+
+// processNewFiles hashes new files and checks for duplicates
+func processNewFiles(state *WatchModeState, files []string) {
+	for _, file := range files {
+		// Wait for file to be fully written (check if it's still being modified)
+		time.Sleep(100 * time.Millisecond)
+
+		hasher := getHasher()
+		hash, size, modTime, err := hashFile(file, hasher)
+		if err != nil {
+			if cfg.Verbose {
+				log.Printf("%sCould not hash %s: %v", emoji("⚠️"), file, err)
+			}
+			continue
+		}
+
+		fh := FileHash{
+			Path:    file,
+			Size:    size,
+			Hash:    hash,
+			ModTime: modTime,
+		}
+
+		// Check for exact duplicates
+		state.mu.RLock()
+		existingFiles, exists := state.hashMap[hash]
+		state.mu.RUnlock()
+
+		var duplicates []FileHash
+		var isDuplicate bool
+
+		if exists && len(existingFiles) > 0 {
+			isDuplicate = true
+			duplicates = existingFiles
+		}
+
+		// Check for perceptual duplicates if enabled
+		var perceptualMatches []FileHash
+		if cfg.PerceptualMode && isImageFile(file) {
+			pHash, err := computePerceptualHash(file, cfg.PHashAlgorithm)
+			if err == nil {
+				fh.PHash = pHash
+
+				state.mu.RLock()
+				pFiles, pExists := state.pHashMap[pHash]
+				state.mu.RUnlock()
+
+				// Also check similar hashes (within threshold)
+				state.mu.RLock()
+				for existingPHash, files := range state.pHashMap {
+					if existingPHash == pHash {
+						continue
+					}
+					dist := hammingDistance(pHash, existingPHash)
+					if dist >= 0 && dist <= cfg.SimilarityThreshold {
+						perceptualMatches = append(perceptualMatches, files...)
+					}
+				}
+				state.mu.RUnlock()
+
+				if pExists && len(pFiles) > 0 {
+					isDuplicate = true
+					perceptualMatches = append(perceptualMatches, pFiles...)
+				}
+
+				state.mu.Lock()
+				state.pHashMap[pHash] = append(state.pHashMap[pHash], fh)
+				state.mu.Unlock()
+			}
+		}
+
+		// Add to hash map
+		state.mu.Lock()
+		state.hashMap[hash] = append(state.hashMap[hash], fh)
+		state.stats.FilesWatched++
+		state.mu.Unlock()
+
+		// Report and handle duplicate
+		if isDuplicate {
+			state.mu.Lock()
+			state.stats.DuplicatesFound++
+			state.stats.SpaceRecoverable += size
+			state.mu.Unlock()
+
+			reportDuplicate(file, duplicates, perceptualMatches, size)
+
+			// Handle auto-clean if enabled
+			if cfg.WatchAutoClean {
+				handleAutoClean(file, size)
+			}
+		} else {
+			log.Printf("%sNew file: %s (%s)", emoji("📄"), filepath.Base(file), formatBytes(size))
+		}
+	}
+}
+
+// reportDuplicate reports a found duplicate
+func reportDuplicate(file string, exactMatches []FileHash, perceptualMatches []FileHash, size int64) {
+	log.Printf("")
+	log.Printf("%s═══════════════════════════════════════════════════════════", emoji("⚠️"))
+	log.Printf("%s  DUPLICATE DETECTED!", emoji("🚨"))
+	log.Printf("%s═══════════════════════════════════════════════════════════", emoji("⚠️"))
+	log.Printf("")
+	log.Printf("%sNew file: %s", emoji("📄"), file)
+	log.Printf("%sSize: %s", emoji("📏"), formatBytes(size))
+	log.Printf("")
+
+	if len(exactMatches) > 0 {
+		log.Printf("%sExact duplicate of:", emoji("🔒"))
+		for _, m := range exactMatches {
+			log.Printf("   • %s (%s)", m.Path, formatBytes(m.Size))
+		}
+	}
+
+	if len(perceptualMatches) > 0 {
+		log.Printf("%sSimilar images:", emoji("🖼️"))
+		for _, m := range perceptualMatches {
+			log.Printf("   • %s (%s)", m.Path, formatBytes(m.Size))
+		}
+	}
+
+	log.Printf("")
+}
+
+// handleAutoClean automatically handles duplicates
+func handleAutoClean(file string, size int64) {
+	if cfg.MoveTo != "" {
+		// Create move directory if it doesn't exist
+		os.MkdirAll(cfg.MoveTo, 0755)
+
+		// Move the file
+		targetPath := filepath.Join(cfg.MoveTo, filepath.Base(file))
+		counter := 1
+		for {
+			if _, err := os.Stat(targetPath); os.IsNotExist(err) {
+				break
+			}
+			ext := filepath.Ext(file)
+			name := strings.TrimSuffix(filepath.Base(file), ext)
+			targetPath = filepath.Join(cfg.MoveTo, fmt.Sprintf("%s_%d%s", name, counter, ext))
+			counter++
+		}
+
+		if err := os.Rename(file, targetPath); err != nil {
+			log.Printf("%sFailed to move %s: %v", emoji("❌"), file, err)
+		} else {
+			log.Printf("%sAuto-moved: %s -> %s", emoji("📦"), file, targetPath)
+		}
+	} else {
+		// Delete the file
+		if err := os.Remove(file); err != nil {
+			log.Printf("%sFailed to delete %s: %v", emoji("❌"), file, err)
+		} else {
+			log.Printf("%sAuto-deleted: %s", emoji("🗑️"), file)
+		}
+	}
+	log.Printf("")
+}
+
+// countHashes returns the total number of unique hashes
+func (s *WatchModeState) countHashes() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.hashMap) + len(s.pHashMap)
+}
+
+// printSummary prints the watch mode summary
+func (s *WatchModeState) printSummary() {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	log.Printf("")
+	log.Printf("%s═══════════════════════════════════════════════════════════", emoji("📊"))
+	log.Printf("%s  WATCH MODE SUMMARY", emoji("📊"))
+	log.Printf("%s═══════════════════════════════════════════════════════════", emoji("📊"))
+	log.Printf("")
+	log.Printf("%sFiles tracked: %d", emoji("📄"), s.stats.FilesWatched)
+	log.Printf("%sDuplicates found: %d", emoji("👯"), s.stats.DuplicatesFound)
+	log.Printf("%sSpace recoverable: %s", emoji("💾"), formatBytes(s.stats.SpaceRecoverable))
+	log.Printf("")
+}
+
 // compareImagesCLI handles the -compare flag for comparing two images
 func compareImagesCLI() error {
 	// Parse the compare argument (can be comma-separated or use -compare-with)
 	var img1, img2 string
-	
+
 	if strings.Contains(cfg.CompareImg1, ",") {
 		parts := strings.SplitN(cfg.CompareImg1, ",", 2)
 		img1 = strings.TrimSpace(parts[0])
@@ -1416,7 +1884,7 @@ func compareImagesCLI() error {
 		fmt.Printf("  Hamming Distance: %d/64\n", dist)
 		fmt.Printf("  Similarity: %.1f%%\n", similarity)
 		fmt.Printf("  Threshold: %d\n", threshold)
-		
+
 		if isSimilar {
 			fmt.Printf("  Result: SIMILAR\n")
 		} else {
@@ -1428,15 +1896,15 @@ func compareImagesCLI() error {
 	fmt.Println(strings.Repeat("=", 70))
 	fmt.Println("RECOMMENDATION")
 	fmt.Println(strings.Repeat("=", 70))
-	
+
 	// Use the requested algorithm for final recommendation
 	reqHash1, _ := computePerceptualHash(img1, cfg.PHashAlgorithm)
 	reqHash2, _ := computePerceptualHash(img2, cfg.PHashAlgorithm)
 	reqDist := hammingDistance(reqHash1, reqHash2)
 	reqSimilarity := 100.0 - (float64(reqDist)/64.0*100.0)
-	
+
 	if reqDist <= cfg.SimilarityThreshold {
-		fmt.Printf("Images are SIMILAR (using %s, threshold %d)\n", 
+		fmt.Printf("Images are SIMILAR (using %s, threshold %d)\n",
 			cfg.PHashAlgorithm, cfg.SimilarityThreshold)
 		fmt.Printf("   Similarity: %.1f%% (distance: %d)\n", reqSimilarity, reqDist)
 	} else {

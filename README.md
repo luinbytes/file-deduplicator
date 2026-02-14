@@ -1,6 +1,20 @@
-# File Deduplicator v3.0.0 🖼️
+# File Deduplicator v3.1.0 👁️
 
-A fast, parallel CLI tool to find and remove duplicate files using SHA256 hashing — **now with perceptual image deduplication!** Find similar photos, not just exact duplicates.
+A fast, parallel CLI tool to find and remove duplicate files using SHA256 hashing — **now with watch mode and perceptual image deduplication!** Find similar photos, not just exact duplicates. Monitor directories in real-time.
+
+## What's New in v3.1
+
+### 👁️ Watch Mode
+Real-time duplicate detection as files are added:
+
+```bash
+file-deduplicator -dir ~/Downloads -watch
+```
+
+- Monitor directories for new files
+- Detect duplicates in real-time
+- Optional auto-clean mode
+- Works with perceptual hashing for images
 
 ## What's New in v3.0
 
@@ -151,6 +165,24 @@ file-deduplicator -compare photo1.jpg,photo2.jpg -phash-algo phash
 file-deduplicator -compare photo1.jpg -compare-with photo2.jpg
 ```
 
+### Watch Mode (Real-time Monitoring)
+
+Monitor directories and detect duplicates as files are added:
+
+```bash
+# Watch for new duplicates
+file-deduplicator -dir ~/Downloads -watch
+
+# Watch with longer debounce
+file-deduplicator -dir ~/Downloads -watch -watch-debounce 5s
+
+# Watch with perceptual image matching
+file-deduplicator -dir ~/Pictures -watch -perceptual
+
+# ⚠️ Auto-clean mode - automatically move/delete duplicates
+file-deduplicator -dir ~/Downloads -watch -watch-auto-clean -move-to ~/Duplicates
+```
+
 ## Options
 
 ### Standard Options
@@ -163,6 +195,7 @@ file-deduplicator -compare photo1.jpg -compare-with photo2.jpg
 | `-verbose` | `false` | Detailed output |
 | `-workers int` | NumCPU | Worker goroutines |
 | `-min-size int` | `1024` | Minimum file size (bytes) |
+| `-max-size int` | `0` | Maximum file size (0 = unlimited) |
 | `-interactive` | `false` | Ask before each delete |
 | `-move-to string` | `""` | Move duplicates here |
 | `-keep string` | `oldest` | Keep: oldest/newest/largest/smallest/first/path |
@@ -181,6 +214,14 @@ file-deduplicator -compare photo1.jpg -compare-with photo2.jpg
 | `-perceptual` | `false` | Enable perceptual image deduplication |
 | `-phash-algo` | `dhash` | Algorithm: dhash/ahash/phash |
 | `-similarity` | `10` | Threshold 0-64 (lower = stricter) |
+
+### Watch Mode Options (NEW in v3.1)
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `-watch` | `false` | Enable real-time watch mode |
+| `-watch-debounce` | `2s` | Debounce interval for file events |
+| `-watch-auto-clean` | `false` | Automatically clean duplicates (dangerous!) |
 
 ### Algorithm Comparison
 
