@@ -236,3 +236,301 @@ func BenchmarkFindDuplicates(b *testing.B) {
 		_ = findDuplicates(fileHashes)
 	}
 }
+
+// Edge case tests
+
+func TestScanFilesEmptyDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Don't create any files - test empty directory
+	files, err := scanFiles(tmpDir, true)
+	if err != nil {
+		t.Fatalf("scanFiles() error = %v", err)
+	}
+
+	if len(files) != 0 {
+		t.Errorf("scanFiles() found %d files in empty directory, want 0", len(files))
+	}
+}
+
+func TestScanFilesNestedEmptyDirectories(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create nested empty directories
+	subDirs := []string{
+		filepath.Join(tmpDir, "level1"),
+		filepath.Join(tmpDir, "level1", "level2"),
+		filepath.Join(tmpDir, "level1", "level2", "level3"),
+	}
+
+	for _, dir := range subDirs {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatalf("Failed to create directory %s: %v", dir, err)
+		}
+	}
+
+	// Should scan successfully with no files
+	files, err := scanFiles(tmpDir, true)
+	if err != nil {
+		t.Fatalf("scanFiles() error = %v", err)
+	}
+
+	if len(files) != 0 {
+		t.Errorf("scanFiles() found %d files in nested empty directories, want 0", len(files))
+	}
+}
+
+func TestScanFilesSymlinks(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create a real file
+	realFile := filepath.Join(tmpDir, "real.txt")
+	if err := os.WriteFile(realFile, []byte("content"), 0644); err != nil {
+		t.Fatalf("Failed to create real file: %v", err)
+	}
+
+	// Create a symlink to the real file
+	symlink := filepath.Join(tmpDir, "link.txt")
+	if err := os.Symlink(realFile, symlink); err != nil {
+		t.Fatalf("Failed to create symlink: %v", err)
+	}
+
+	// Symlink should be followed and file should be found
+	files, err := scanFiles(tmpDir, true)
+	if err != nil {
+		t.Fatalf("scanFiles() error = %v", err)
+	}
+
+	// Both real file and symlink should be found
+	// (symlinks are followed by filepath.Walk)
+	if len(files) < 1 {
+		t.Errorf("scanFiles() found %d files, want at least 1", len(files))
+	}
+}
+
+func TestScanFilesSymlinkToDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create a directory with a file
+	realDir := filepath.Join(tmpDir, "realdir")
+	if err := os.Mkdir(realDir, 0755); err != nil {
+		t.Fatalf("Failed to create directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(realDir, "file.txt"), []byte("content"), 0644); err != nil {
+		t.Fatalf("Failed to create file: %v", err)
+	}
+
+	// Create a symlink to the directory
+	linkDir := filepath.Join(tmpDir, "linkdir")
+	if err := os.Symlink(realDir, linkDir); err != nil {
+		t.Fatalf("Failed to create symlink: %v", err)
+	}
+
+	// Should handle symlinked directories
+	files, err := scanFiles(tmpDir, true)
+	if err != nil {
+		t.Fatalf("scanFiles() error = %v", err)
+	}
+
+	// Should find the file (may appear twice due to symlink)
+	if len(files) < 1 {
+		t.Errorf("scanFiles() found %d files, want at least 1", len(files))
+	}
+}
+
+func TestScanFilesBrokenSymlink(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create a broken symlink (points to non-existent file)
+	brokenLink := filepath.Join(tmpDir, "broken")
+	if err := os.Symlink("/nonexistent/file", brokenLink); err != nil {
+		t.Fatalf("Failed to create broken symlink: %v", err)
+	}
+
+	// Note: filepath.Walk reports broken symlinks, but they can't be hashed
+	// The scanFiles function will report them, but hashFile will fail
+	files, err := scanFiles(tmpDir, true)
+	if err != nil {
+		t.Fatalf("scanFiles() error = %v", err)
+	}
+
+	// Broken symlinks may be found by scan, but should fail when hashed
+	// This is acceptable behavior - the error is caught during hashing
+	// We just verify no panic/crash occurs
+	_ = files // Files may be found, but will fail hashing
+}
+
+func TestHashFilePermissionDenied(t *testing.T) {
+	// Skip on Windows - permission handling differs
+	if os.PathSeparator == '\\' {
+		t.Skip("Skipping on Windows")
+	}
+
+	tmpDir := t.TempDir()
+	restrictedFile := filepath.Join(tmpDir, "restricted.txt")
+
+	// Create a file with no read permissions
+	if err := os.WriteFile(restrictedFile, []byte("content"), 0000); err != nil {
+		t.Fatalf("Failed to create restricted file: %v", err)
+	}
+
+	// Try to hash the file - should fail gracefully
+	hasher := sha256.New()
+	_, _, _, err := hashFile(restrictedFile, hasher)
+	if err == nil {
+		// Restore permissions before cleanup
+		os.Chmod(restrictedFile, 0644)
+		t.Error("hashFile() should fail on file with no read permissions")
+	}
+
+	// Restore permissions before cleanup
+	os.Chmod(restrictedFile, 0644)
+}
+
+func TestScanFilesHiddenDirectory(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create visible file
+	if err := os.WriteFile(filepath.Join(tmpDir, "visible.txt"), []byte("content"), 0644); err != nil {
+		t.Fatalf("Failed to create visible file: %v", err)
+	}
+
+	// Create hidden directory with file
+	hiddenDir := filepath.Join(tmpDir, ".hidden")
+	if err := os.Mkdir(hiddenDir, 0755); err != nil {
+		t.Fatalf("Failed to create hidden directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(hiddenDir, "file.txt"), []byte("content"), 0644); err != nil {
+		t.Fatalf("Failed to create file in hidden directory: %v", err)
+	}
+
+	// Hidden directories should be skipped
+	files, err := scanFiles(tmpDir, true)
+	if err != nil {
+		t.Fatalf("scanFiles() error = %v", err)
+	}
+
+	if len(files) != 1 {
+		t.Errorf("scanFiles() found %d files, want 1 (hidden directory should be skipped)", len(files))
+	}
+}
+
+func TestScanFilesHiddenFile(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create visible file
+	if err := os.WriteFile(filepath.Join(tmpDir, "visible.txt"), []byte("content"), 0644); err != nil {
+		t.Fatalf("Failed to create visible file: %v", err)
+	}
+
+	// Create hidden file
+	if err := os.WriteFile(filepath.Join(tmpDir, ".hidden"), []byte("content"), 0644); err != nil {
+		t.Fatalf("Failed to create hidden file: %v", err)
+	}
+
+	// Hidden files should be skipped
+	files, err := scanFiles(tmpDir, true)
+	if err != nil {
+		t.Fatalf("scanFiles() error = %v", err)
+	}
+
+	if len(files) != 1 {
+		t.Errorf("scanFiles() found %d files, want 1 (hidden file should be skipped)", len(files))
+	}
+}
+
+func TestSelectFileToKeep(t *testing.T) {
+	now := time.Now()
+	files := []FileHash{
+		{Path: "/path/oldest.txt", Size: 100, ModTime: now.Add(-24 * time.Hour)},
+		{Path: "/path/newest.txt", Size: 200, ModTime: now},
+		{Path: "/path/largest.txt", Size: 500, ModTime: now.Add(-12 * time.Hour)},
+		{Path: "/path/smallest.txt", Size: 50, ModTime: now.Add(-6 * time.Hour)},
+	}
+
+	group := DuplicateGroup{Files: files}
+
+	tests := []struct {
+		name     string
+		criteria string
+		wantPath string
+	}{
+		{"oldest", "oldest", "/path/oldest.txt"},
+		{"newest", "newest", "/path/newest.txt"},
+		{"largest", "largest", "/path/largest.txt"},
+		{"smallest", "smallest", "/path/smallest.txt"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg.KeepCriteria = tt.criteria
+			idx := selectFileToKeep(group)
+			if group.Files[idx].Path != tt.wantPath {
+				t.Errorf("selectFileToKeep(%s) = %s, want %s", tt.criteria, group.Files[idx].Path, tt.wantPath)
+			}
+		})
+	}
+}
+
+func TestSelectFileToKeepPath(t *testing.T) {
+	files := []FileHash{
+		{Path: "/path/to/file1.txt"},
+		{Path: "/path/to/file2.txt"},
+		{Path: "/another/path/file3.txt"},
+	}
+
+	group := DuplicateGroup{Files: files}
+
+	cfg.KeepCriteria = "path:another"
+	idx := selectFileToKeep(group)
+	if group.Files[idx].Path != "/another/path/file3.txt" {
+		t.Errorf("selectFileToKeep(path:another) = %s, want /another/path/file3.txt", group.Files[idx].Path)
+	}
+}
+
+func TestFormatFileError(t *testing.T) {
+	tests := []struct {
+		name     string
+		path     string
+		err      error
+		contains string
+	}{
+		{"permission denied", "/test/file", os.ErrPermission, "Permission denied"},
+		{"file not found", "/test/file", os.ErrNotExist, "File not found"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatFileError(tt.path, tt.err)
+			if !strings.Contains(got, tt.contains) {
+				t.Errorf("formatFileError() = %s, should contain %s", got, tt.contains)
+			}
+		})
+	}
+}
+
+func TestFindDuplicatesNoDuplicates(t *testing.T) {
+	// All files have unique hashes
+	fileHashes := []FileHash{
+		{Path: "/a.txt", Size: 100, Hash: "hash1"},
+		{Path: "/b.txt", Size: 100, Hash: "hash2"},
+		{Path: "/c.txt", Size: 100, Hash: "hash3"},
+	}
+
+	duplicates := findDuplicates(fileHashes)
+	if len(duplicates) != 0 {
+		t.Errorf("findDuplicates() found %d groups, want 0", len(duplicates))
+	}
+}
+
+func TestFindDuplicatesSingleFile(t *testing.T) {
+	// Only one file - can't have duplicates
+	fileHashes := []FileHash{
+		{Path: "/a.txt", Size: 100, Hash: "hash1"},
+	}
+
+	duplicates := findDuplicates(fileHashes)
+	if len(duplicates) != 0 {
+		t.Errorf("findDuplicates() found %d groups with single file, want 0", len(duplicates))
+	}
+}
