@@ -3,8 +3,10 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 
 	"github.com/mattn/go-isatty"
 )
@@ -44,7 +46,7 @@ func spawnTerminal() error {
 	}
 
 	// On macOS, use open command
-	if _, err := exec.LookPath("open"); err == nil {
+	if runtime.GOOS == "darwin" {
 		cmd := exec.Command("open", "-a", "Terminal", exe, "--args", "--tui")
 		cmd.Env = env
 		return cmd.Start()
@@ -61,5 +63,5 @@ func spawnTerminal() error {
 		}
 	}
 
-	return nil
+	return fmt.Errorf("no terminal emulator found")
 }
