@@ -66,6 +66,8 @@ type Config struct {
 	PerceptualMode bool   // Enable perceptual hashing for images
 	PHashAlgorithm string // "dhash", "ahash", "phash"
 	SimilarityThreshold int // Hamming distance threshold (0-64, default 10)
+	// Output options
+	JSON           bool   // Output results as JSON to stdout (for integrations)
 }
 
 var (
@@ -87,6 +89,7 @@ func init() {
 	flag.StringVar(&cfg.FilePattern, "pattern", "", "File pattern to match (e.g., *.jpg, *.pdf)")
 	flag.BoolVar(&cfg.ExportReport, "export", false, "Export duplicate report to JSON file")
 	flag.BoolVar(&cfg.UndoLast, "undo", false, "Undo last operation")
+	flag.BoolVar(&cfg.JSON, "json", false, "Output results as JSON to stdout (for integrations)")
 	
 	// Perceptual hashing flags
 	flag.BoolVar(&cfg.PerceptualMode, "perceptual", false, "Enable perceptual hashing for images (finds similar images, not just exact duplicates)")
@@ -114,38 +117,52 @@ func main() {
 
 	flag.Parse()
 
+	// Handle JSON output mode
+	if cfg.JSON {
+		// Suppress all logging for clean JSON output
+		log.SetOutput(io.Discard)
+		cfg.Verbose = false
+	}
+
 	// Handle undo
 	if cfg.UndoLast {
 		if err := undoLast(); err != nil {
-			log.Fatalf("❌ Error undoing: %v", err)
+			if !cfg.JSON {
+				log.Fatalf("❌ Error undoing: %v", err)
+			} else {
+				fmt.Fprintf(os.Stderr, "{\"error\": \"%v\"}\n", err)
+				os.Exit(1)
+			}
 		}
 		return
 	}
 
-	log.SetFlags(log.Ltime)
-
-	log.Printf("🔍 File Deduplicator v%s - Starting...", version)
-	if cfg.Verbose {
-		log.Printf("📁 Scanning directory: %s", cfg.Dir)
-		log.Printf("🔄 Recursive: %v", cfg.Recursive)
-		log.Printf("👷 Workers: %d", cfg.Workers)
-		log.Printf("📏 Min size: %d bytes", cfg.MinSize)
-		log.Printf("🔐 Hash algorithm: %s", cfg.HashAlgorithm)
-		if cfg.FilePattern != "" {
-			log.Printf("🎯 File pattern: %s", cfg.FilePattern)
-		}
-		if cfg.MoveTo != "" {
-			log.Printf("📦 Move duplicates to: %s", cfg.MoveTo)
-		}
-		log.Printf("✋ Keep criteria: %s", cfg.KeepCriteria)
-		if cfg.Interactive {
-			log.Printf("❓ Interactive mode enabled (legacy)")
-		}
-		if cfg.TUI {
-			log.Printf("🖥️  TUI mode enabled")
-		}
-		if cfg.PerceptualMode {
-			log.Printf("🖼️  Perceptual mode enabled (%s, threshold: %d)", cfg.PHashAlgorithm, cfg.SimilarityThreshold)
+	// Skip logging setup in JSON mode
+	if !cfg.JSON {
+		log.SetFlags(log.Ltime)
+		log.Printf("🔍 File Deduplicator v%s - Starting...", version)
+		if cfg.Verbose {
+			log.Printf("📁 Scanning directory: %s", cfg.Dir)
+			log.Printf("🔄 Recursive: %v", cfg.Recursive)
+			log.Printf("👷 Workers: %d", cfg.Workers)
+			log.Printf("📏 Min size: %d bytes", cfg.MinSize)
+			log.Printf("🔐 Hash algorithm: %s", cfg.HashAlgorithm)
+			if cfg.FilePattern != "" {
+				log.Printf("🎯 File pattern: %s", cfg.FilePattern)
+			}
+			if cfg.MoveTo != "" {
+				log.Printf("📦 Move duplicates to: %s", cfg.MoveTo)
+			}
+			log.Printf("✋ Keep criteria: %s", cfg.KeepCriteria)
+			if cfg.Interactive {
+				log.Printf("❓ Interactive mode enabled (legacy)")
+			}
+			if cfg.TUI {
+				log.Printf("🖥️  TUI mode enabled")
+			}
+			if cfg.PerceptualMode {
+				log.Printf("🖼️  Perceptual mode enabled (%s, threshold: %d)", cfg.PHashAlgorithm, cfg.SimilarityThreshold)
+			}
 		}
 	}
 
@@ -154,10 +171,17 @@ func main() {
 	// Scan files
 	files, err := scanFiles(cfg.Dir, cfg.Recursive)
 	if err != nil {
-		log.Fatalf("❌ Error scanning files: %v", err)
+		if !cfg.JSON {
+			log.Fatalf("❌ Error scanning files: %v", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "{\"error\": \"failed to scan files: %v\"}\n", err)
+			os.Exit(1)
+		}
 	}
 
-	log.Printf("📊 Found %d files", len(files))
+	if !cfg.JSON {
+		log.Printf("📊 Found %d files", len(files))
+	}
 
 	// Filter by minimum size
 	var filteredFiles []string
@@ -174,7 +198,9 @@ func main() {
 			if cfg.FilePattern != "" {
 				matched, err := filepath.Match(cfg.FilePattern, filepath.Base(file))
 				if err != nil {
-					log.Printf("⚠️  Invalid pattern %s: %v", cfg.FilePattern, err)
+					if !cfg.JSON {
+						log.Printf("⚠️  Invalid pattern %s: %v", cfg.FilePattern, err)
+					}
 					continue
 				}
 				if !matched {
@@ -187,20 +213,42 @@ func main() {
 			filteredFiles = append(filteredFiles, file)
 		}
 	}
-	log.Printf("📏 After filters: %d files", len(filteredFiles))
+
+	if !cfg.JSON {
+		log.Printf("📏 After filters: %d files", len(filteredFiles))
+	}
 
 	// Compute hashes in parallel
 	fileHashes, err := computeHashes(filteredFiles)
 	if err != nil {
-		log.Fatalf("❌ Error computing hashes: %v", err)
+		if !cfg.JSON {
+			log.Fatalf("❌ Error computing hashes: %v", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "{\"error\": \"failed to compute hashes: %v\"}\n", err)
+			os.Exit(1)
+		}
 	}
-	if !cfg.Verbose {
-		fmt.Fprintln(os.Stderr) // Newline after progress bar
+
+	if !cfg.JSON {
+		if !cfg.Verbose {
+			fmt.Fprintln(os.Stderr) // Newline after progress bar
+		}
+		log.Printf("🔐 Computed %d hashes", len(fileHashes))
 	}
-	log.Printf("🔐 Computed %d hashes", len(fileHashes))
 
 	// Find duplicates
 	duplicates := findDuplicates(fileHashes)
+
+	// Handle JSON output mode
+	if cfg.JSON {
+		if err := outputJSON(duplicates); err != nil {
+			fmt.Fprintf(os.Stderr, "{\"error\": \"failed to output JSON: %v\"}\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	// Normal mode: report and process
 	log.Printf("👯 Found %d duplicate groups", len(duplicates))
 
 	// Report duplicates
@@ -259,7 +307,7 @@ func scanFiles(dir string, recursive bool) ([]string, error) {
 			lastProgressUpdate = time.Now()
 			if cfg.Verbose {
 				log.Printf("📁 Scanned %d files...", currentScanned)
-			} else {
+			} else if !cfg.JSON {
 				fmt.Fprintf(os.Stderr, "\r📁 Scanning: %d files", currentScanned)
 			}
 		}
@@ -292,7 +340,7 @@ func scanFiles(dir string, recursive bool) ([]string, error) {
 	})
 
 	// Final progress update
-	if !cfg.Verbose {
+	if !cfg.Verbose && !cfg.JSON {
 		fmt.Fprintf(os.Stderr, "\r📁 Scanning: %d files\n", len(files))
 	}
 
@@ -399,7 +447,7 @@ func worker(wg *sync.WaitGroup, fileChan <-chan string, resultChan chan<- FileHa
 			*lastProgressUpdate = time.Now()
 			if cfg.Verbose {
 				log.Printf("🔐 Hashed %d/%d files (%.1f%%)", currentHashed, totalFiles, float64(currentHashed)*100/float64(totalFiles))
-			} else {
+			} else if !cfg.JSON {
 				percentage := float64(currentHashed) * 100 / float64(totalFiles)
 				fmt.Fprintf(os.Stderr, "\r🔐 Hashing: %d/%d files (%.1f%%)", currentHashed, totalFiles, percentage)
 			}
@@ -940,6 +988,40 @@ func exportReport(duplicates []DuplicateGroup) error {
 	}
 
 	return os.WriteFile(reportFile, data, 0644)
+}
+
+// outputJSON outputs the duplicate report as JSON to stdout
+func outputJSON(duplicates []DuplicateGroup) error {
+	type Report struct {
+		Version        string            `json:"version"`
+		Timestamp      time.Time         `json:"timestamp"`
+		Config         Config            `json:"config"`
+		DuplicateCount int               `json:"duplicate_count"`
+		TotalSpace     int64             `json:"total_space"`
+		Duplicates     []DuplicateGroup  `json:"duplicates"`
+	}
+
+	totalSpace := int64(0)
+	for _, group := range duplicates {
+		totalSpace += group.Size * int64(len(group.Files)-1)
+	}
+
+	report := Report{
+		Version:        version,
+		Timestamp:      time.Now(),
+		Config:         cfg,
+		DuplicateCount: len(duplicates),
+		TotalSpace:     totalSpace,
+		Duplicates:     duplicates,
+	}
+
+	data, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	fmt.Println(string(data))
+	return nil
 }
 
 func formatBytes(bytes int64) string {
