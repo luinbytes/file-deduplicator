@@ -96,13 +96,10 @@ type Config struct {
 	PerceptualMode bool   // Enable perceptual hashing for images
 	PHashAlgorithm string // "dhash", "ahash", "phash"
 	SimilarityThreshold int // Hamming distance threshold (0-64, default 10)
-	// Image comparison flags
-	CompareImg1 string // First image for comparison
-	CompareImg2 string // Second image for comparison
-	// Watch mode options
-	WatchMode      bool          // Enable real-time watch mode
-	WatchDebounce  time.Duration // Debounce interval for file events
-	WatchAutoClean bool          // Automatically move/delete duplicates as they appear
+	// Output options
+	JSON           bool   // Output results as JSON to stdout (for integrations)
+	// Theme options
+	Theme          string // "dark", "light", "auto" (default: "auto")
 }
 
 var (
@@ -141,8 +138,9 @@ func init() {
 	flag.BoolVar(&cfg.ExportReport, "export", false, "Export duplicate report to JSON file")
 	flag.BoolVar(&cfg.ExportCSV, "export-csv", false, "Export duplicate report to CSV file")
 	flag.BoolVar(&cfg.UndoLast, "undo", false, "Undo last operation")
-	flag.BoolVar(&cfg.NoEmoji, "no-emoji", false, "Disable emoji output for cleaner logs")
-
+	flag.BoolVar(&cfg.JSON, "json", false, "Output results as JSON to stdout (for integrations)")
+	flag.StringVar(&cfg.Theme, "theme", "auto", "Color theme: dark, light, auto (detects terminal background)")
+	
 	// Perceptual hashing flags
 	flag.BoolVar(&cfg.PerceptualMode, "perceptual", false, "Enable perceptual hashing for images (finds similar images, not just exact duplicates)")
 	flag.StringVar(&cfg.PHashAlgorithm, "phash-algo", "dhash", "Perceptual hash algorithm: dhash (fast), ahash, phash (robust)")
@@ -307,75 +305,74 @@ func loadConfig() error {
 }
 
 func main() {
-	// Parse only -config flag first to get config file path
-	flag.Parse()
+	// Load persisted config (theme preference)
+	loadConfig()
 
-	// Load config file if specified or found in default locations
-	if err := loadConfig(); err != nil {
-		log.Printf("Warning: could not load config: %v", err)
+	// Detect if double-clicked vs run from CLI
+	if isDoubleClick() && os.Getenv("_DEDUP_SPAWNED") != "1" {
+		// Double-clicked: spawn terminal with TUI and exit
+		if err := spawnTerminal(); err != nil {
+			fmt.Fprintf(os.Stderr, "⚠️  Failed to spawn terminal: %v\n", err)
+			fmt.Fprintf(os.Stderr, "💡 Try running from command line with --tui flag\n")
+		}
+		return
 	}
 
-	// Re-parse flags to override config values
+	// If from CLI with no arguments, show help
+	if len(os.Args) == 1 {
+		fmt.Fprintf(os.Stderr, "File Deduplicator v%s\n\nUsage: %s [options]\n\nOptions:\n", version, os.Args[0])
+		flag.PrintDefaults()
+		return
+	}
+
 	flag.Parse()
 
-	// Set default directory to binary location if not explicitly specified
-	if cfg.Dir == "." {
-		if binaryDir := getBinaryDir(); binaryDir != "" {
-			cfg.Dir = binaryDir
-		}
+	// Handle JSON output mode
+	if cfg.JSON {
+		// Suppress all logging for clean JSON output
+		log.SetOutput(io.Discard)
+		cfg.Verbose = false
 	}
 
 	// Handle undo
 	if cfg.UndoLast {
 		if err := undoLast(); err != nil {
-			log.Fatalf("❌ Error undoing: %v", err)
+			if !cfg.JSON {
+				log.Fatalf("❌ Error undoing: %v", err)
+			} else {
+				fmt.Fprintf(os.Stderr, "{\"error\": \"%v\"}\n", err)
+				os.Exit(1)
+			}
 		}
 		return
 	}
 
-	// Handle image comparison
-	if cfg.CompareImg1 != "" {
-		if err := compareImagesCLI(); err != nil {
-			log.Fatalf("❌ Error comparing images: %v", err)
-		}
-		return
-	}
-
-	// Handle watch mode
-	if cfg.WatchMode {
-		if err := runWatchMode(); err != nil {
-			log.Fatalf("❌ Error in watch mode: %v", err)
-		}
-		return
-	}
-
-	log.SetFlags(log.Ltime)
-
-	log.Printf("%sFile Deduplicator v%s - Starting...", emoji("🔍"), version)
-	if cfg.Verbose {
-		log.Printf("%sScanning directory: %s", emoji("📁"), cfg.Dir)
-		log.Printf("%sRecursive: %v", emoji("🔄"), cfg.Recursive)
-		log.Printf("%sWorkers: %d", emoji("👷"), cfg.Workers)
-		log.Printf("%sMin size: %d bytes", emoji("📏"), cfg.MinSize)
-		if cfg.MaxSize > 0 {
-			log.Printf("%sMax size: %d bytes", emoji("📏"), cfg.MaxSize)
-		}
-		log.Printf("%sHash algorithm: %s", emoji("🔐"), cfg.HashAlgorithm)
-		if cfg.FilePattern != "" {
-			log.Printf("%sFile pattern: %s", emoji("🎯"), cfg.FilePattern)
-		}
-		if cfg.MoveTo != "" {
-			log.Printf("%sMove duplicates to: %s", emoji("📦"), cfg.MoveTo)
-		}
-		log.Printf("%sKeep criteria: %s", emoji("✋"), cfg.KeepCriteria)
-		if cfg.Interactive {
-			log.Printf("❓ Interactive mode enabled (legacy)")
-		}
-		if cfg.TUI {
-			log.Printf("🖥️  TUI mode enabled")
-		}
-		if cfg.PerceptualMode {
-			log.Printf("%sPerceptual mode enabled (%s, threshold: %d)", emoji("🖼️"), cfg.PHashAlgorithm, cfg.SimilarityThreshold)
+	// Skip logging setup in JSON mode
+	if !cfg.JSON {
+		log.SetFlags(log.Ltime)
+		log.Printf("🔍 File Deduplicator v%s - Starting...", version)
+		if cfg.Verbose {
+			log.Printf("📁 Scanning directory: %s", cfg.Dir)
+			log.Printf("🔄 Recursive: %v", cfg.Recursive)
+			log.Printf("👷 Workers: %d", cfg.Workers)
+			log.Printf("📏 Min size: %d bytes", cfg.MinSize)
+			log.Printf("🔐 Hash algorithm: %s", cfg.HashAlgorithm)
+			if cfg.FilePattern != "" {
+				log.Printf("🎯 File pattern: %s", cfg.FilePattern)
+			}
+			if cfg.MoveTo != "" {
+				log.Printf("📦 Move duplicates to: %s", cfg.MoveTo)
+			}
+			log.Printf("✋ Keep criteria: %s", cfg.KeepCriteria)
+			if cfg.Interactive {
+				log.Printf("❓ Interactive mode enabled (legacy)")
+			}
+			if cfg.TUI {
+				log.Printf("🖥️  TUI mode enabled")
+			}
+			if cfg.PerceptualMode {
+				log.Printf("🖼️  Perceptual mode enabled (%s, threshold: %d)", cfg.PHashAlgorithm, cfg.SimilarityThreshold)
+			}
 		}
 	}
 
@@ -384,10 +381,17 @@ func main() {
 	// Scan files
 	files, err := scanFiles(cfg.Dir, cfg.Recursive)
 	if err != nil {
-		log.Fatalf("❌ Error scanning files: %v", err)
+		if !cfg.JSON {
+			log.Fatalf("❌ Error scanning files: %v", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "{\"error\": \"failed to scan files: %v\"}\n", err)
+			os.Exit(1)
+		}
 	}
 
-	log.Printf("%sFound %d files", emoji("📊"), len(files))
+	if !cfg.JSON {
+		log.Printf("📊 Found %d files", len(files))
+	}
 
 	// Filter by minimum size
 	var filteredFiles []string
@@ -405,7 +409,9 @@ func main() {
 			if cfg.FilePattern != "" {
 				matched, err := filepath.Match(cfg.FilePattern, filepath.Base(file))
 				if err != nil {
-					log.Printf("%sInvalid pattern %s: %v", emoji("⚠️"), cfg.FilePattern, err)
+					if !cfg.JSON {
+						log.Printf("⚠️  Invalid pattern %s: %v", cfg.FilePattern, err)
+					}
 					continue
 				}
 				if !matched {
@@ -426,24 +432,53 @@ func main() {
 			}
 		}
 	}
-	log.Printf("%sAfter filters: %d files", emoji("📏"), len(filteredFiles))
+
+	if !cfg.JSON {
+		log.Printf("📏 After filters: %d files", len(filteredFiles))
+	}
 
 	// Compute hashes in parallel
 	fileHashes, err := computeHashes(filteredFiles)
 	if err != nil {
-		log.Fatalf("❌ Error computing hashes: %v", err)
+		if !cfg.JSON {
+			log.Fatalf("❌ Error computing hashes: %v", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "{\"error\": \"failed to compute hashes: %v\"}\n", err)
+			os.Exit(1)
+		}
 	}
-	if !cfg.Verbose {
-		fmt.Fprintln(os.Stderr) // Newline after progress bar
+
+	if !cfg.JSON {
+		if !cfg.Verbose {
+			fmt.Fprintln(os.Stderr) // Newline after progress bar
+		}
+		log.Printf("🔐 Computed %d hashes", len(fileHashes))
 	}
-	log.Printf("%sComputed %d hashes", emoji("🔐"), len(fileHashes))
 
 	// Find duplicates
 	duplicates := findDuplicates(fileHashes)
-	log.Printf("%sFound %d duplicate groups", emoji("👯"), len(duplicates))
+
+	// Handle JSON output mode
+	if cfg.JSON {
+		if err := outputJSON(duplicates); err != nil {
+			fmt.Fprintf(os.Stderr, "{\"error\": \"failed to output JSON: %v\"}\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	// Normal mode: report and process
+	log.Printf("👯 Found %d duplicate groups", len(duplicates))
 
 	// Report duplicates
 	reportDuplicates(duplicates)
+
+	// Save config if theme was explicitly set
+	if isFlagSet("theme") {
+		if err := saveConfig(); err != nil && !cfg.JSON {
+			log.Printf("⚠️  Failed to save config: %v", err)
+		}
+	}
 
 	// Export report if requested
 	if cfg.ExportReport {
@@ -507,7 +542,7 @@ func scanFiles(dir string, recursive bool) ([]string, error) {
 			lastProgressUpdate = time.Now()
 			if cfg.Verbose {
 				log.Printf("📁 Scanned %d files...", currentScanned)
-			} else {
+			} else if !cfg.JSON {
 				fmt.Fprintf(os.Stderr, "\r📁 Scanning: %d files", currentScanned)
 			}
 		}
@@ -540,7 +575,7 @@ func scanFiles(dir string, recursive bool) ([]string, error) {
 	})
 
 	// Final progress update
-	if !cfg.Verbose {
+	if !cfg.Verbose && !cfg.JSON {
 		fmt.Fprintf(os.Stderr, "\r📁 Scanning: %d files\n", len(files))
 	}
 
@@ -665,8 +700,9 @@ func worker(wg *sync.WaitGroup, fileChan <-chan string, resultChan chan<- FileHa
 			*lastProgressUpdate = time.Now()
 			if cfg.Verbose {
 				log.Printf("🔐 Hashed %d/%d files (%.1f%%)", currentHashed, totalFiles, float64(currentHashed)*100/float64(totalFiles))
-			} else {
-				printProgress(currentHashed, totalFiles, startTime)
+			} else if !cfg.JSON {
+				percentage := float64(currentHashed) * 100 / float64(totalFiles)
+				fmt.Fprintf(os.Stderr, "\r🔐 Hashing: %d/%d files (%.1f%%)", currentHashed, totalFiles, percentage)
 			}
 		}
 	}
@@ -1318,50 +1354,115 @@ func exportReport(duplicates []DuplicateGroup) error {
 	return os.WriteFile(reportFile, data, 0644)
 }
 
-// exportCSV exports duplicates to CSV format for easy integration with other tools
-func exportCSV(duplicates []DuplicateGroup) error {
-	const csvFile = ".deduplicator_report.csv"
-
-	var buf strings.Builder
-
-	// CSV Header
-	buf.WriteString("group_hash,group_size,group_similarity,filepath,file_size,file_modified,is_duplicate,action\n")
-
-	for _, group := range duplicates {
-		keepIdx := selectFileToKeep(group)
-		for i, fh := range group.Files {
-			isDuplicate := i != keepIdx
-			action := "keep"
-			if isDuplicate {
-				if cfg.MoveTo != "" {
-					action = "move"
-				} else {
-					action = "delete"
-				}
-			}
-
-			// Escape fields that might contain commas
-			path := fmt.Sprintf("%q", fh.Path)
-			groupHash := group.Hash
-			if len(groupHash) > 16 {
-				groupHash = groupHash[:16] + "..."
-			}
-
-			line := fmt.Sprintf("%s,%d,%.0f,%s,%d,%s,%t,%s\n",
-				groupHash,
-				group.Size,
-				group.Similarity,
-				path,
-				fh.Size,
-				fh.ModTime.Format("2006-01-02 15:04:05"),
-				isDuplicate,
-				action,
-			)
-			buf.WriteString(line)
-		}
+// outputJSON outputs the duplicate report as JSON to stdout
+func outputJSON(duplicates []DuplicateGroup) error {
+	type Report struct {
+		Version        string            `json:"version"`
+		Timestamp      time.Time         `json:"timestamp"`
+		Config         Config            `json:"config"`
+		DuplicateCount int               `json:"duplicate_count"`
+		TotalSpace     int64             `json:"total_space"`
+		Duplicates     []DuplicateGroup  `json:"duplicates"`
 	}
 
-	return os.WriteFile(csvFile, []byte(buf.String()), 0644)
+	totalSpace := int64(0)
+	for _, group := range duplicates {
+		totalSpace += group.Size * int64(len(group.Files)-1)
+	}
+
+	report := Report{
+		Version:        version,
+		Timestamp:      time.Now(),
+		Config:         cfg,
+		DuplicateCount: len(duplicates),
+		TotalSpace:     totalSpace,
+		Duplicates:     duplicates,
+	}
+
+	data, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	fmt.Println(string(data))
+	return nil
+}
+
+// configFile returns the path to the config file
+func configFile() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".config", "file-deduplicator", "config.json")
+}
+
+// loadConfig loads the persisted configuration
+func loadConfig() {
+	configPath := configFile()
+	if configPath == "" {
+		return
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		// Config file doesn't exist, use defaults
+		return
+	}
+
+	type persistedConfig struct {
+		Theme string `json:"theme"`
+	}
+
+	var pc persistedConfig
+	if err := json.Unmarshal(data, &pc); err != nil {
+		return
+	}
+
+	// Override theme if set in config and not overridden by flag
+	if pc.Theme != "" && !isFlagSet("theme") {
+		cfg.Theme = pc.Theme
+	}
+}
+
+// saveConfig persists the configuration
+func saveConfig() error {
+	configPath := configFile()
+	if configPath == "" {
+		return fmt.Errorf("cannot determine config path")
+	}
+
+	// Create directory if it doesn't exist
+	configDir := filepath.Dir(configPath)
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return err
+	}
+
+	type persistedConfig struct {
+		Theme string `json:"theme"`
+	}
+
+	pc := persistedConfig{
+		Theme: cfg.Theme,
+	}
+
+	data, err := json.MarshalIndent(pc, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(configPath, data, 0644)
+}
+
+// isFlagSet checks if a flag was explicitly set on the command line
+func isFlagSet(name string) bool {
+	found := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			found = true
+		}
+	})
+	return found
 }
 
 func formatBytes(bytes int64) string {

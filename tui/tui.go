@@ -16,8 +16,8 @@ import (
 var (
 	titleStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("#FAFAFA")).
-			Background(lipgloss.Color("#7D56F4")).
+			Foreground(lipgloss.AdaptiveColor{Light: "#FAFAFA", Dark: "#FAFAFA"}).
+			Background(lipgloss.AdaptiveColor{Light: "#7D56F4", Dark: "#7D56F4"}).
 			PaddingLeft(2).
 			PaddingRight(2)
 
@@ -25,26 +25,26 @@ var (
 
 	selectedItemStyle = lipgloss.NewStyle().
 				PaddingLeft(2).
-				Foreground(lipgloss.Color("#7D56F4")).
+				Foreground(lipgloss.AdaptiveColor{Light: "#7D56F4", Dark: "#BA9FFB"}).
 				Bold(true)
 
 	checkedStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#04B575")).
+			Foreground(lipgloss.AdaptiveColor{Light: "#04B575", Dark: "#04B575"}).
 			Bold(true)
 
 	uncheckedStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#666666"))
+			Foreground(lipgloss.AdaptiveColor{Light: "#666666", Dark: "#888888"})
 
 	infoStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#888888"))
+			Foreground(lipgloss.AdaptiveColor{Light: "#888888", Dark: "#AAAAAA"})
 
 	headerStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("#FAFAFA"))
+			Foreground(lipgloss.AdaptiveColor{Light: "#000000", Dark: "#FAFAFA"})
 
 	previewStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("#7D56F4")).
+			BorderForeground(lipgloss.AdaptiveColor{Light: "#7D56F4", Dark: "#BA9FFB"}).
 			Padding(1)
 )
 
