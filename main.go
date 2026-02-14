@@ -68,6 +68,8 @@ type Config struct {
 	SimilarityThreshold int // Hamming distance threshold (0-64, default 10)
 	// Output options
 	JSON           bool   // Output results as JSON to stdout (for integrations)
+	// Theme options
+	Theme          string // "dark", "light", "auto" (default: "auto")
 }
 
 var (
@@ -90,6 +92,7 @@ func init() {
 	flag.BoolVar(&cfg.ExportReport, "export", false, "Export duplicate report to JSON file")
 	flag.BoolVar(&cfg.UndoLast, "undo", false, "Undo last operation")
 	flag.BoolVar(&cfg.JSON, "json", false, "Output results as JSON to stdout (for integrations)")
+	flag.StringVar(&cfg.Theme, "theme", "auto", "Color theme: dark, light, auto (detects terminal background)")
 	
 	// Perceptual hashing flags
 	flag.BoolVar(&cfg.PerceptualMode, "perceptual", false, "Enable perceptual hashing for images (finds similar images, not just exact duplicates)")
@@ -98,6 +101,9 @@ func init() {
 }
 
 func main() {
+	// Load persisted config (theme preference)
+	loadConfig()
+
 	// Detect if double-clicked vs run from CLI
 	if isDoubleClick() && os.Getenv("_DEDUP_SPAWNED") != "1" {
 		// Double-clicked: spawn terminal with TUI and exit
@@ -253,6 +259,13 @@ func main() {
 
 	// Report duplicates
 	reportDuplicates(duplicates)
+
+	// Save config if theme was explicitly set
+	if isFlagSet("theme") {
+		if err := saveConfig(); err != nil && !cfg.JSON {
+			log.Printf("⚠️  Failed to save config: %v", err)
+		}
+	}
 
 	// Export report if requested
 	if cfg.ExportReport {
@@ -1022,6 +1035,83 @@ func outputJSON(duplicates []DuplicateGroup) error {
 
 	fmt.Println(string(data))
 	return nil
+}
+
+// configFile returns the path to the config file
+func configFile() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".config", "file-deduplicator", "config.json")
+}
+
+// loadConfig loads the persisted configuration
+func loadConfig() {
+	configPath := configFile()
+	if configPath == "" {
+		return
+	}
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		// Config file doesn't exist, use defaults
+		return
+	}
+
+	type persistedConfig struct {
+		Theme string `json:"theme"`
+	}
+
+	var pc persistedConfig
+	if err := json.Unmarshal(data, &pc); err != nil {
+		return
+	}
+
+	// Override theme if set in config and not overridden by flag
+	if pc.Theme != "" && !isFlagSet("theme") {
+		cfg.Theme = pc.Theme
+	}
+}
+
+// saveConfig persists the configuration
+func saveConfig() error {
+	configPath := configFile()
+	if configPath == "" {
+		return fmt.Errorf("cannot determine config path")
+	}
+
+	// Create directory if it doesn't exist
+	configDir := filepath.Dir(configPath)
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return err
+	}
+
+	type persistedConfig struct {
+		Theme string `json:"theme"`
+	}
+
+	pc := persistedConfig{
+		Theme: cfg.Theme,
+	}
+
+	data, err := json.MarshalIndent(pc, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(configPath, data, 0644)
+}
+
+// isFlagSet checks if a flag was explicitly set on the command line
+func isFlagSet(name string) bool {
+	found := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			found = true
+		}
+	})
+	return found
 }
 
 func formatBytes(bytes int64) string {
