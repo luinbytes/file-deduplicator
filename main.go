@@ -590,7 +590,7 @@ func computeHashes(files []string) ([]FileHash, error) {
 	// Check for errors
 	for err := range errorChan {
 		if err != nil {
-			log.Printf("%sError: %v", emoji("⚠️"), err)
+			log.Printf("%s%s", emoji("⚠️"), formatFileError("", err))
 		}
 	}
 
@@ -622,7 +622,7 @@ func worker(wg *sync.WaitGroup, fileChan <-chan string, resultChan chan<- FileHa
 		hasher := getHasher()
 		hash, size, modTime, err := hashFile(file, hasher)
 		if err != nil {
-			errorChan <- fmt.Errorf("%s: %w", file, err)
+			errorChan <- fmt.Errorf("%s", formatFileError(file, err))
 			continue
 		}
 
@@ -1375,6 +1375,31 @@ func formatBytes(bytes int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
+}
+
+// formatFileError provides user-friendly error messages for common file issues
+func formatFileError(path string, err error) string {
+	// Check for common error types
+	errStr := err.Error()
+	
+	switch {
+	case os.IsPermission(err):
+		return fmt.Sprintf("%s: Permission denied. Try running with elevated privileges or check file ownership.", path)
+	case os.IsNotExist(err):
+		return fmt.Sprintf("%s: File not found. It may have been deleted or moved.", path)
+	case strings.Contains(errStr, "too many open files"):
+		return fmt.Sprintf("%s: System limit reached. Try reducing -workers count or increase ulimit.", path)
+	case strings.Contains(errStr, "input/output error") || strings.Contains(errStr, "I/O error"):
+		return fmt.Sprintf("%s: I/O error. The disk may be failing or the file is corrupted.", path)
+	case strings.Contains(errStr, "is a directory"):
+		return fmt.Sprintf("%s: Expected a file but found a directory.", path)
+	case strings.Contains(errStr, "no such file or directory"):
+		return fmt.Sprintf("%s: File not found. It may have been deleted during scanning.", path)
+	case strings.Contains(errStr, "invalid argument"):
+		return fmt.Sprintf("%s: Invalid file or path. Check for special characters in filename.", path)
+	default:
+		return fmt.Sprintf("%s: %v", path, err)
+	}
 }
 
 // printStatistics displays detailed operation statistics
