@@ -183,6 +183,35 @@ file-deduplicator -dir ~/Pictures -watch -perceptual
 file-deduplicator -dir ~/Downloads -watch -watch-auto-clean -move-to ~/Duplicates
 ```
 
+## Configuration Profiles
+
+Pre-built profiles for common use cases:
+
+```bash
+# Photographer - for photo libraries
+file-deduplicator -dir ~/Pictures -config profiles/photographer.json -dry-run
+
+# Developer - for code repositories
+file-deduplicator -dir ~/Projects -config profiles/developer.json
+
+# SysAdmin - for backups and logs
+file-deduplicator -dir /backup -config profiles/sysadmin.json
+
+# Designer - for design assets
+file-deduplicator -dir ~/Design -config profiles/designer.json
+```
+
+Available profiles:
+- **photographer** - Perceptual hashing for similar images
+- **developer** - Source code and config files
+- **sysadmin** - Backups and system files
+- **designer** - Design assets and exports
+- **video_editor** - Large video files
+- **minimal** - Quick, lightweight scans
+- **thorough** - Maximum accuracy
+
+See [profiles/README.md](profiles/README.md) for details.
+
 ## Options
 
 ### Standard Options

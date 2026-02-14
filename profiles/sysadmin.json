@@ -1,0 +1,28 @@
+{
+  "name": "SysAdmin",
+  "description": "Optimized for system administrators managing backup directories, log archives, and system files. Aggressive settings for finding duplicates across backup sets.",
+  
+  "config": {
+    "recursive": true,
+    "hash": "sha256",
+    "perceptual": false,
+    "keep": "newest",
+    "min_size": 1024,
+    "workers": 8
+  },
+  
+  "usage": {
+    "backups": "file-deduplicator -dir /backup -config profiles/sysadmin.json -dry-run",
+    "with_move": "file-deduplicator -dir /backup -config profiles/sysadmin.json -move-to /backup-duplicates",
+    "logs": "file-deduplicator -dir /var/log/archive -config profiles/sysadmin.json -pattern '*.log*'",
+    "home_dirs": "file-deduplicator -dir /home -config profiles/sysadmin.json -min-size 10240"
+  },
+  
+  "notes": [
+    "Uses SHA256 for reliable duplicate detection",
+    "Keeps newest files (most recent backups)",
+    "No file pattern - scans all files",
+    "High worker count for faster processing of large directories",
+    "Use with -move-to for safe cleanup of backup duplicates"
+  ]
+}

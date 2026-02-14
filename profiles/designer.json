@@ -1,0 +1,30 @@
+{
+  "name": "Designer",
+  "description": "Optimized for graphic designers and creatives managing design assets. Enables perceptual hashing to find similar images, focuses on design file formats.",
+  
+  "config": {
+    "recursive": true,
+    "hash": "sha256",
+    "perceptual": true,
+    "phash_algo": "dhash",
+    "similarity": 10,
+    "keep": "largest",
+    "min_size": 5120,
+    "pattern": "*.{png,jpg,jpeg,gif,webp,svg,psd,ai,sketch,fig,xd,pdf,eps}",
+    "workers": 6
+  },
+  
+  "usage": {
+    "basic": "file-deduplicator -dir ~/Design -config profiles/designer.json -dry-run",
+    "strict": "file-deduplicator -dir ~/Design -config profiles/designer.json -similarity 6",
+    "exports": "file-deduplicator -dir ~/Design/Exports -config profiles/designer.json -move-to ~/Duplicates"
+  },
+  
+  "notes": [
+    "Uses dHash for fast perceptual matching",
+    "Keeps largest files (highest resolution exports)",
+    "Minimum 5KB to skip tiny icons/thumbnails",
+    "Pattern matches common design file formats",
+    "Good for finding duplicate exports from different projects"
+  ]
+}
