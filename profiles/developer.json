@@ -1,0 +1,29 @@
+{
+  "name": "Developer",
+  "description": "Optimized for developers managing code repositories, build artifacts, and development files. Focuses on common dev file types and excludes common build/dependency directories.",
+  
+  "config": {
+    "recursive": true,
+    "hash": "sha256",
+    "perceptual": false,
+    "keep": "oldest",
+    "min_size": 512,
+    "pattern": "*.{js,ts,py,go,rs,java,c,cpp,h,hpp,cs,rb,php,swift,kt,scala,sh,bash,zsh,ps1,json,yaml,yml,xml,sql,md}",
+    "workers": 4,
+    "exclude_dirs": ["node_modules", "vendor", ".git", "target", "build", "dist", "__pycache__", ".venv", "venv", "env"]
+  },
+  
+  "usage": {
+    "basic": "file-deduplicator -dir ~/Projects -config profiles/developer.json -dry-run",
+    "interactive": "file-deduplicator -dir ~/Projects -config profiles/developer.json -tui",
+    "export": "file-deduplicator -dir ~/Projects -config profiles/developer.json -export"
+  },
+  
+  "notes": [
+    "Uses SHA256 for exact duplicate detection",
+    "Keeps oldest files (original implementations)",
+    "Minimum 512 bytes to skip empty/minimal files",
+    "Pattern matches common source code and config files",
+    "Note: exclude_dirs is a planned feature - use -pattern for now"
+  ]
+}

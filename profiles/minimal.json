@@ -1,0 +1,25 @@
+{
+  "name": "Minimal",
+  "description": "Lightweight settings for quick scans. Good for small directories or when you want fast results with minimal resource usage.",
+  
+  "config": {
+    "recursive": true,
+    "hash": "md5",
+    "perceptual": false,
+    "keep": "oldest",
+    "min_size": 1024,
+    "workers": 2
+  },
+  
+  "usage": {
+    "basic": "file-deduplicator -dir ~/Downloads -config profiles/minimal.json -dry-run",
+    "quick": "file-deduplicator -dir . -config profiles/minimal.json"
+  },
+  
+  "notes": [
+    "Uses MD5 for fastest hashing",
+    "Minimal worker count for low resource usage",
+    "Good for quick scans of small directories",
+    "Not recommended for very large directories"
+  ]
+}
