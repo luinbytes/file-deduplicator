@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
@@ -37,6 +38,9 @@ func NewGoogleDriveProvider(ctx context.Context, credentialsFile, tokenFile stri
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse credentials: %w", err)
 	}
+
+	// Set the endpoint explicitly (ConfigFromJSON doesn't set it for installed apps)
+	config.Endpoint = google.Endpoint
 
 	// Load or create token
 	token, err := loadToken(tokenFile)
@@ -106,7 +110,7 @@ func (p *GoogleDriveProvider) listFilesRecursive(ctx context.Context, folderID, 
 		for _, file := range result.Files {
 			filePath := filepath.Join(currentPath, file.Name)
 
-			modTime, _ := file.ModifiedTime.Parse()
+			modTime, _ := time.Parse(time.RFC3339, file.ModifiedTime)
 
 			info := FileInfo{
 				ID:       file.Id,
@@ -143,8 +147,12 @@ func (p *GoogleDriveProvider) getFolderID(ctx context.Context, path string) (str
 		return "root", nil
 	}
 
-	// Split path into components
-	parts := filepath.SplitList(path)
+	// Split path into components (Google Drive uses / as separator)
+	path = strings.Trim(path, "/")
+	if path == "" {
+		return "root", nil
+	}
+	parts := strings.Split(path, "/")
 	if len(parts) == 0 {
 		return "root", nil
 	}
