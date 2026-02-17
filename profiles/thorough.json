@@ -1,0 +1,30 @@
+{
+  "name": "Thorough",
+  "description": "Comprehensive settings for maximum accuracy. Uses SHA256, includes perceptual hashing for images, and processes all files.",
+  
+  "config": {
+    "recursive": true,
+    "hash": "sha256",
+    "perceptual": true,
+    "phash_algo": "phash",
+    "similarity": 6,
+    "keep": "oldest",
+    "min_size": 1,
+    "workers": 8
+  },
+  
+  "usage": {
+    "basic": "file-deduplicator -dir ~/Documents -config profiles/thorough.json -dry-run",
+    "full": "file-deduplicator -dir / -config profiles/thorough.json -export",
+    "strict": "file-deduplicator -dir ~/Archive -config profiles/thorough.json -similarity 4"
+  },
+  
+  "notes": [
+    "Uses SHA256 for cryptographic certainty",
+    "pHash for most robust image matching",
+    "Low similarity threshold for strict matching",
+    "No minimum size - scans everything",
+    "High worker count for faster processing",
+    "Best for important archives where accuracy matters"
+  ]
+}

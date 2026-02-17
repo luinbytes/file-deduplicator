@@ -1,0 +1,28 @@
+{
+  "name": "Video Editor",
+  "description": "Optimized for video editors managing large video libraries. Focuses on video formats and uses larger minimum size to avoid scanning small thumbnails/metadata files.",
+  
+  "config": {
+    "recursive": true,
+    "hash": "sha256",
+    "perceptual": false,
+    "keep": "newest",
+    "min_size": 10485760,
+    "pattern": "*.{mp4,mov,avi,mkv,wmv,flv,webm,m4v,mxf,prores,dnxhd}",
+    "workers": 2
+  },
+  
+  "usage": {
+    "basic": "file-deduplicator -dir ~/Videos -config profiles/video_editor.json -dry-run",
+    "projects": "file-deduplicator -dir ~/VideoProjects -config profiles/video_editor.json -tui",
+    "archive": "file-deduplicator -dir /video-archive -config profiles/video_editor.json -export"
+  },
+  
+  "notes": [
+    "Uses SHA256 for exact duplicate detection",
+    "Keeps newest files (latest exports/renders)",
+    "Minimum 10MB to focus on actual video files",
+    "Pattern matches common video formats including professional codecs",
+    "Lower worker count due to large file sizes"
+  ]
+}

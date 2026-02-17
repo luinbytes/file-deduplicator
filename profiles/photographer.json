@@ -1,0 +1,29 @@
+{
+  "name": "Photographer",
+  "description": "Optimized for photographers managing large photo libraries. Enables perceptual hashing to find similar images, focuses on common image formats, and keeps the largest/highest quality versions.",
+  
+  "config": {
+    "recursive": true,
+    "hash": "sha256",
+    "perceptual": true,
+    "phash_algo": "phash",
+    "similarity": 8,
+    "keep": "largest",
+    "min_size": 102400,
+    "pattern": "*.{jpg,jpeg,png,gif,webp,raw,cr2,nef,arw,dng,tiff,tif}",
+    "workers": 8
+  },
+  
+  "usage": {
+    "basic": "file-deduplicator -dir ~/Pictures -config profiles/photographer.json -dry-run",
+    "with_move": "file-deduplicator -dir ~/Pictures -config profiles/photographer.json -move-to ~/Duplicates",
+    "strict": "file-deduplicator -dir ~/Pictures -config profiles/photographer.json -similarity 5"
+  },
+  
+  "notes": [
+    "Uses pHash algorithm for most robust image matching",
+    "Keeps largest files (usually highest resolution)",
+    "Minimum 100KB to skip thumbnails and icons",
+    "Pattern matches common photo formats including RAW"
+  ]
+}
