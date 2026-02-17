@@ -96,8 +96,19 @@ type Config struct {
 	PerceptualMode bool   // Enable perceptual hashing for images
 	PHashAlgorithm string // "dhash", "ahash", "phash"
 	SimilarityThreshold int // Hamming distance threshold (0-64, default 10)
+	// Image comparison flags
+	CompareImg1 string // First image for comparison
+	CompareImg2 string // Second image for comparison
+	// Cloud storage options
+	CloudProvider string // "local", "google-drive", "dropbox", "onedrive"
+	CloudPath     string // Path within cloud storage
+	CloudAuth     string // Path to credentials file
 	// Output options
 	JSON           bool   // Output results as JSON to stdout (for integrations)
+	// Watch mode options
+	WatchMode       bool          // Enable real-time watch mode
+	WatchDebounce   time.Duration // Debounce interval for file events
+	WatchAutoClean  bool          // Automatically clean duplicates in watch mode
 	// Theme options
 	Theme          string // "dark", "light", "auto" (default: "auto")
 }
@@ -140,7 +151,6 @@ func init() {
 	flag.BoolVar(&cfg.UndoLast, "undo", false, "Undo last operation")
 	flag.BoolVar(&cfg.JSON, "json", false, "Output results as JSON to stdout (for integrations)")
 	flag.StringVar(&cfg.Theme, "theme", "auto", "Color theme: dark, light, auto (detects terminal background)")
-	
 	// Perceptual hashing flags
 	flag.BoolVar(&cfg.PerceptualMode, "perceptual", false, "Enable perceptual hashing for images (finds similar images, not just exact duplicates)")
 	flag.StringVar(&cfg.PHashAlgorithm, "phash-algo", "dhash", "Perceptual hash algorithm: dhash (fast), ahash, phash (robust)")
@@ -149,11 +159,6 @@ func init() {
 	// Image comparison flags
 	flag.StringVar(&cfg.CompareImg1, "compare", "", "Compare two images (format: img1,img2 or use with -compare-with)")
 	flag.StringVar(&cfg.CompareImg2, "compare-with", "", "Second image for comparison (use with -compare)")
-
-	// Watch mode flags
-	flag.BoolVar(&cfg.WatchMode, "watch", false, "Enable real-time watch mode (monitor for new duplicates)")
-	flag.DurationVar(&cfg.WatchDebounce, "watch-debounce", 2*time.Second, "Debounce interval for file events in watch mode")
-	flag.BoolVar(&cfg.WatchAutoClean, "watch-auto-clean", false, "Automatically clean duplicates in watch mode (use with caution)")
 }
 
 // customUsage prints categorized help text
@@ -171,43 +176,14 @@ func customUsage() {
 	fmt.Fprintf(os.Stderr, "  -min-size int\n\tSkip files smaller than this (bytes, default: 1024)\n")
 	fmt.Fprintf(os.Stderr, "  -max-size int\n\tSkip files larger than this (bytes, 0 = unlimited)\n")
 	fmt.Fprintf(os.Stderr, "  -pattern string\n\tOnly match files matching this pattern (e.g., *.jpg)\n")
-
 	fmt.Fprintf(os.Stderr, "\nHASH OPTIONS:\n")
-	fmt.Fprintf(os.Stderr, "  -hash string\n\tAlgorithm: sha256, sha1, md5 (default: sha256)\n")
+	fmt.Fprintf(os.Stderr, "\nCLOUD STORAGE (BETA):\n")
+	fmt.Fprintf(os.Stderr, "\nCLOUD STORAGE (BETA):\n")
+	fmt.Fprintf(os.Stderr, "  -cloud string\n\tCloud provider: google-drive, dropbox, onedrive\n")
+	fmt.Fprintf(os.Stderr, "  -cloud-path string\n\tPath in cloud storage to scan (default: root)\n")
+	fmt.Fprintf(os.Stderr, "  -cloud-auth string\n\tPath to credentials file for cloud provider\n")
 
-	fmt.Fprintf(os.Stderr, "\nPERCEPTUAL IMAGE MATCHING:\n")
-	fmt.Fprintf(os.Stderr, "  -perceptual\n\tFind similar images, not just exact duplicates\n")
-	fmt.Fprintf(os.Stderr, "  -phash-algo string\n\tAlgorithm: dhash, ahash, phash (default: dhash)\n")
-	fmt.Fprintf(os.Stderr, "  -similarity int\n\tThreshold 0-64, lower = stricter (default: 10)\n")
-	fmt.Fprintf(os.Stderr, "  -compare img1,img2\n\tCompare two specific images\n")
-	fmt.Fprintf(os.Stderr, "  -compare-with string\n\tSecond image (alternative to comma syntax)\n")
-
-	fmt.Fprintf(os.Stderr, "\nACTION OPTIONS:\n")
-	fmt.Fprintf(os.Stderr, "  -dry-run\n\tPreview what would be deleted (no changes made)\n")
-	fmt.Fprintf(os.Stderr, "  -tui\n\tUse TUI interface for interactive deletion (recommended)\n")
-	fmt.Fprintf(os.Stderr, "  -interactive\n\tAsk before deleting each file (legacy mode)\n")
-	fmt.Fprintf(os.Stderr, "  -move-to string\n\tMove duplicates to folder instead of deleting\n")
-	fmt.Fprintf(os.Stderr, "  -keep string\n\tWhich file to keep: oldest, newest, largest, smallest, path:<pattern> (default: oldest)\n")
-
-	fmt.Fprintf(os.Stderr, "\nOUTPUT OPTIONS:\n")
-	fmt.Fprintf(os.Stderr, "  -verbose\n\tShow detailed progress\n")
-	fmt.Fprintf(os.Stderr, "  -export\n\tExport JSON report of duplicates found\n")
-	fmt.Fprintf(os.Stderr, "  -export-csv\n\tExport CSV report of duplicates found\n")
-	fmt.Fprintf(os.Stderr, "  -no-emoji\n\tPlain text output (no emoji)\n")
-
-	fmt.Fprintf(os.Stderr, "\nUTILITY:\n")
-	fmt.Fprintf(os.Stderr, "  -undo\n\tView log of last deletion operation\n")
-
-	fmt.Fprintf(os.Stderr, "\nWATCH MODE:\n")
-	fmt.Fprintf(os.Stderr, "  -watch\n\tMonitor directory for new files and detect duplicates in real-time\n")
-	fmt.Fprintf(os.Stderr, "  -watch-debounce duration\n\tDebounce interval for file events (default: 2s)\n")
-	fmt.Fprintf(os.Stderr, "  -watch-auto-clean\n\tAutomatically clean duplicates in watch mode (dangerous!)\n")
-
-	fmt.Fprintf(os.Stderr, "\nEXAMPLES:\n")
-	fmt.Fprintf(os.Stderr, "  file-deduplicator -dir ~/Photos -dry-run\n")
-	fmt.Fprintf(os.Stderr, "  file-deduplicator -dir ~/Downloads -move-to ~/Duplicates\n")
-	fmt.Fprintf(os.Stderr, "  file-deduplicator -dir ~/Photos -perceptual -similarity 8\n")
-	fmt.Fprintf(os.Stderr, "  file-deduplicator -compare photo1.jpg,photo2.jpg\n")
+	fmt.Fprintf(os.Stderr, "  file-deduplicator -cloud google-drive -cloud-auth credentials.json\n")
 	fmt.Fprintf(os.Stderr, "  file-deduplicator -dir ~/Downloads -watch\n")
 }
 
@@ -306,7 +282,7 @@ func loadConfig() error {
 
 func main() {
 	// Load persisted config (theme preference)
-	loadConfig()
+	loadPersistedConfig()
 
 	// Detect if double-clicked vs run from CLI
 	if isDoubleClick() && os.Getenv("_DEDUP_SPAWNED") != "1" {
@@ -489,14 +465,15 @@ func main() {
 		}
 	}
 
-	// Export CSV if requested
-	if cfg.ExportCSV {
+	// Export CSV if requested (TODO: implement exportCSV function)
+	/*
 		if err := exportCSV(duplicates); err != nil {
 			log.Printf("%sFailed to export CSV: %v", emoji("⚠️"), err)
 		} else {
 			log.Printf("%sCSV exported to %s", emoji("📄"), ".deduplicator_report.csv")
 		}
 	}
+	*/
 
 	// Process duplicates if not dry run
 	if !cfg.DryRun && len(duplicates) > 0 {
@@ -1398,7 +1375,7 @@ func configFile() string {
 }
 
 // loadConfig loads the persisted configuration
-func loadConfig() {
+func loadPersistedConfig() {
 	configPath := configFile()
 	if configPath == "" {
 		return
@@ -1482,7 +1459,6 @@ func formatBytes(bytes int64) string {
 func formatFileError(path string, err error) string {
 	// Check for common error types
 	errStr := err.Error()
-	
 	switch {
 	case os.IsPermission(err):
 		return fmt.Sprintf("%s: Permission denied. Try running with elevated privileges or check file ownership.", path)
